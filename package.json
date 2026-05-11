@@ -1,0 +1,23 @@
+{
+  "name": "voice-translation-engine",
+  "version": "1.0.0",
+  "description": "Stateless realtime phone translation engine (Plivo + OpenAI Realtime Translation)",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "alawmulaw": "^6.0.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "plivo": "^4.69.6",
+    "swagger-ui-express": "^5.0.1",
+    "uuid": "^11.0.5",
+    "ws": "^8.18.0"
+  }
+}
