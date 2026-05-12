@@ -26,7 +26,8 @@ function normalizePipeline(v) {
 
 /**
  * Voice interpreter connects to `wss://api.openai.com/v1/realtime?model=…`.
- * Default: **gpt-4o-realtime-preview** — widely available; fast/accurate audio on standard Realtime API.
+ * Default: **gpt-4o-realtime-preview** — aliases and fallbacks include mini + `gpt-realtime*` slugs
+ * (API may entitle different models per account; Realtime is **not** available on the API “Free” usage tier).
  *
  * @see https://developers.openai.com/api/docs/models/gpt-4o-realtime-preview
  */
@@ -34,7 +35,14 @@ function buildOpenAiVoiceModelChain() {
   const primary = req('OPENAI_VOICE_REALTIME_MODEL', 'gpt-4o-realtime-preview');
   const fallbacks = req(
     'OPENAI_VOICE_REALTIME_MODEL_FALLBACKS',
-    'gpt-4o-realtime-preview-2025-06-03,gpt-4o-realtime-preview-2024-12-17,gpt-4o-realtime-preview-2024-10-01',
+    [
+      'gpt-4o-mini-realtime-preview',
+      'gpt-realtime',
+      'gpt-realtime-mini',
+      'gpt-4o-realtime-preview-2025-06-03',
+      'gpt-4o-realtime-preview-2024-12-17',
+      'gpt-4o-realtime-preview-2024-10-01',
+    ].join(','),
   );
   const parts = [primary, ...String(fallbacks).split(',')]
     .map((s) => s.trim())
