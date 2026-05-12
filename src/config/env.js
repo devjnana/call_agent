@@ -90,13 +90,12 @@ export const env = {
   plivoCallerId: req('PLIVO_PHONE_NUMBER'),
   plivoValidateSignatures: req('PLIVO_VALIDATE_SIGNATURES', 'false') === 'true',
   /**
-   * Plivo `<Conference muted>`: participant does **not transmit** to the conference mix (others won’t hear their raw mic on the bridge).
-   * For interpreter booths use **true** on both legs so callers only hear **`playAudio`** (TTS), not each other’s live voice.
-   * If **false**, both legs hear raw English/Hindi on the PSTN **in addition to** translation — sounds like “no translation”.
-   * If your Stream stops getting RTP with muted=true, ask Plivo or temporarily set false while testing.
+   * Plivo `<Conference muted>`: that leg does **not transmit** into its conference room.
+   * Agent and customer join **different** rooms (`conferenceRoomName(id, leg)`), so they never hear each other’s raw voice on the bridge.
+   * Default **false** so the bidirectional Stream still receives mic RTP. Set **true** only if you also need to suppress mic→bridge.
    */
   plivoConferenceMuted:
-    String(req('PLIVO_CONFERENCE_MUTED', 'true')).toLowerCase() === 'true',
+    String(req('PLIVO_CONFERENCE_MUTED', 'false')).toLowerCase() === 'true',
   /** Plivo Stream REST: `inbound` (default) or `both` if inbound gives silence in conference. */
   plivoStreamAudioTrack: req('PLIVO_STREAM_AUDIO_TRACK', 'inbound'),
   customerDialDelayMs: reqNum('CUSTOMER_DIAL_DELAY_MS', 400),
@@ -154,13 +153,8 @@ export function assertEnvForRuntime() {
   }
 
   console.info(
-    `[boot] PLIVO_CONFERENCE_MUTED=${env.plivoConferenceMuted} (true=recommended: no raw mic in conference mix, only playAudio translation) · PLIVO_STREAM_AUDIO_TRACK=${env.plivoStreamAudioTrack}`,
+    `[boot] PLIVO_CONFERENCE_MUTED=${env.plivoConferenceMuted} · PLIVO_STREAM_AUDIO_TRACK=${env.plivoStreamAudioTrack} (agent/customer use separate conference rooms — no raw cross-talk)`,
   );
-  if (!env.plivoConferenceMuted) {
-    console.warn(
-      '[boot] PLIVO_CONFERENCE_MUTED=false — callers may hear each other LIVE on the conference bridge (raw English/Hindi) as well as TTS. Set PLIVO_CONFERENCE_MUTED=true for interpreter-only audio.',
-    );
-  }
   const p = env.openaiRealtimePipeline;
   if (p === 'voice') {
     console.info(

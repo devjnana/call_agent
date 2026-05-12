@@ -78,6 +78,8 @@ export class CallOrchestrator {
     return {
       session_id: id,
       conference: conferenceRoomName(id),
+      conference_agent: conferenceRoomName(id, 'agent'),
+      conference_customer: conferenceRoomName(id, 'customer'),
       state: 'dialing_agent',
     };
   }

@@ -233,8 +233,19 @@ const base = {
           session_id: { type: 'string', format: 'uuid' },
           conference: {
             type: 'string',
-            description: 'Plivo conference room name',
-            example: 'tr-a1b2c3d4-...',
+            description:
+              'Session conference prefix (logging). Agent and customer join separate rooms: `conference_agent` and `conference_customer`.',
+            example: 'tr-a1b2c3d4',
+          },
+          conference_agent: {
+            type: 'string',
+            description: 'Plivo conference room for the agent leg only.',
+            example: 'tr-a1b2c3d4-agent',
+          },
+          conference_customer: {
+            type: 'string',
+            description: 'Plivo conference room for the customer leg only.',
+            example: 'tr-a1b2c3d4-cust',
           },
           state: { type: 'string', example: 'dialing_agent' },
         },
