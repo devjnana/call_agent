@@ -107,6 +107,9 @@ export function attachPlivoMediaWs(server, registry) {
       (req.url || '').slice(0, 140),
     );
 
+    /** Bind socket before Plivo may send audio — avoids playAudio to a null leg if `media` precedes `start`. */
+    sess.attachPlivoSocket(leg, ws, {});
+
     ws.on('close', (code, reason) => {
       log.info(
         'Plivo WS socket closed (before events?)',

@@ -166,6 +166,14 @@ export function assertEnvForRuntime() {
     );
     if (!env.sarvamApiKey) console.warn('[boot] SARVAM_API_KEY missing — pipeline will error until set');
     if (!env.elevenlabsApiKey) console.warn('[boot] ELEVENLABS_API_KEY missing — pipeline will error until set');
+    const vid = String(process.env.ELEVENLABS_VOICE_ID || '').trim();
+    const ven = String(process.env.ELEVENLABS_VOICE_EN || '').trim();
+    const vhi = String(process.env.ELEVENLABS_VOICE_HI || '').trim();
+    if (!vid && (!ven || !vhi)) {
+      console.warn(
+        '[boot] ElevenLabs: set ELEVENLABS_VOICE_ID (single voice for every leg) **or** both ELEVENLABS_VOICE_EN and ELEVENLABS_VOICE_HI for Hindi↔English. Missing EN voice → agent hears nothing (cust→agent).',
+      );
+    }
     if (env.pipelineTroubleshootLog) {
       console.info('[boot] PIPELINE_TROUBLESHOOT_LOG=true — Sarvam+11 will log flush/STT/TTS/playAudio details');
     }

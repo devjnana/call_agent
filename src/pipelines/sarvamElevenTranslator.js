@@ -29,6 +29,8 @@ export class SarvamElevenTranslator {
     this.label = opts.label || 'sarvam+11';
 
     this.closed = false;
+    /** Set in `connect()` when voice id / Sarvam target invalid — do not run STT/TTS. */
+    this.configInvalid = false;
     /** @type {Buffer} */
     this.buffer = Buffer.alloc(0);
     this.silenceMs = env.pipelineUtteranceSilenceMs;
@@ -54,6 +56,7 @@ export class SarvamElevenTranslator {
   connect() {
     const tgt = iso639ToSarvam(this.targetIso639);
     if (!env.sarvamApiKey || !env.elevenlabsApiKey) {
+      this.configInvalid = true;
       queueMicrotask(() =>
         this.onError(
           new Error(
@@ -64,16 +67,18 @@ export class SarvamElevenTranslator {
       return;
     }
     if (!this.elevenLabsVoiceId) {
+      this.configInvalid = true;
       queueMicrotask(() =>
         this.onError(
           new Error(
-            'Sarvam+ElevenLabs pipeline: set ELEVENLABS_VOICE_ID (and optional ELEVENLABS_VOICE_EN / _HI)',
+            'Sarvam+ElevenLabs pipeline: set ELEVENLABS_VOICE_ID and/or per-language ELEVENLABS_VOICE_EN, ELEVENLABS_VOICE_HI (agent hears EN → need VOICE_EN or VOICE_ID).',
           ),
         ),
       );
       return;
     }
     if (!tgt) {
+      this.configInvalid = true;
       queueMicrotask(() =>
         this.onError(
           new Error(
@@ -90,7 +95,7 @@ export class SarvamElevenTranslator {
 
   /** @param {Buffer} pcm16le24k mono */
   appendPcm24kMono(pcm16le24k) {
-    if (this.closed || !pcm16le24k.length) return;
+    if (this.closed || this.configInvalid || !pcm16le24k.length) return;
 
     if (env.pipelineTroubleshootLog && !this._loggedFirstIngress) {
       this._loggedFirstIngress = true;
@@ -205,6 +210,7 @@ export class SarvamElevenTranslator {
    * @param {AbortSignal} signal
    */
   async processPcmUtterance(pcm24, signal) {
+    if (this.configInvalid || !this.elevenLabsVoiceId) return;
     const targetSarvam = iso639ToSarvam(this.targetIso639);
     if (!targetSarvam) {
       throw new Error(`Unsupported target ISO for Sarvam: ${this.targetIso639}`);

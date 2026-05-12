@@ -36,7 +36,7 @@ function sendPcm24ToPlivo(ws, pcm24kDelta, troubleshootCtx) {
         event: 'playAudio',
         media: {
           contentType: 'audio/x-mulaw',
-          sampleRate: '8000',
+          sampleRate: 8000,
           payload: mu,
         },
       }),
@@ -200,20 +200,26 @@ export class TranslationSession {
    * Persist live Plivo websocket + stream metadata per leg (Gateway calls once on `start`).
    * @param {"agent"|"customer"} role
    */
-  attachPlivoSocket(role, ws, meta) {
+  attachPlivoSocket(role, ws, meta = {}) {
     this.touch();
     const streamId = meta?.streamId ?? null;
     if (role === 'agent') {
-      this.agentPlivoWs = ws;
-      this.agentStreamId = streamId;
+      if (this.agentPlivoWs !== ws) {
+        this.agentPlivoWs = ws;
+        ws.once('close', () => {
+          this.onPlivoSocketClosed('agent');
+        });
+      }
+      if (streamId) this.agentStreamId = streamId;
     } else {
-      this.customerPlivoWs = ws;
-      this.customerStreamId = streamId;
+      if (this.customerPlivoWs !== ws) {
+        this.customerPlivoWs = ws;
+        ws.once('close', () => {
+          this.onPlivoSocketClosed('customer');
+        });
+      }
+      if (streamId) this.customerStreamId = streamId;
     }
-
-    ws.once('close', () => {
-      this.onPlivoSocketClosed(role);
-    });
   }
 
   /** @param {"agent"|"customer"} spokeRole RTP source mic */
