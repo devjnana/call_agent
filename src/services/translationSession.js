@@ -323,11 +323,23 @@ export class TranslationSession {
       );
     }
 
+    /**
+     * Barge-in: clear Plivo playAudio only for the leg that is *speaking*, so we do not
+     * cancel the translation the callee is supposed to hear.
+     *
+     * Example bug: agent talks → TTS to customer while agent mic packets still arrive;
+     * clearing "customer" playback here chopped the customer's audio mid-sentence.
+     */
     if (spokeRole === 'agent' && this.agentStreamId && speech) {
-      this.clearPlivoPlaybackForListener('customer', this.customerStreamId);
-    }
-    if (spokeRole === 'customer' && this.customerStreamId && speech) {
       this.clearPlivoPlaybackForListener('agent', this.agentStreamId);
+    }
+    if (spokeRole === 'customer' && speech) {
+      if (this.agentStreamId) {
+        this.clearPlivoPlaybackForListener('agent', this.agentStreamId);
+      }
+      if (this.customerStreamId) {
+        this.clearPlivoPlaybackForListener('customer', this.customerStreamId);
+      }
     }
 
     const pcm16 =
