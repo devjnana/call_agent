@@ -43,10 +43,8 @@ export class CallOrchestrator {
     }
     assertE164like('agent_number', agentRaw);
     assertE164like('customer_number', custRaw);
-    const { toAgentTag, toCustomerTag } = resolveTranslationTargets(
-      agent_language,
-      customer_language,
-    );
+    const { toAgentTag, toCustomerTag, agentSpokenApprox, customerSpokenApprox } =
+      resolveTranslationTargets(agent_language, customer_language);
 
     const id = uuidv4();
     const sess = new TranslationSession({
@@ -55,6 +53,8 @@ export class CallOrchestrator {
       customerE164: custRaw,
       toAgentTag,
       toCustomerTag,
+      agentSpokenApprox,
+      customerSpokenApprox,
     });
 
     sess.onDestroy(async () => {

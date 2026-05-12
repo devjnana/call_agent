@@ -64,6 +64,21 @@ Optional tuning:
 
 ---
 
+### OpenAI: call connects but silence / `gpt-realtime-translate` access errors
+
+The dedicated **[GPT Realtime Translate](https://developers.openai.com/api/docs/models/gpt-realtime-translate)** SKU (`/v1/realtime/translations`) is **not usable on OPENAI FREE tiers** (“Not supported” in OpenAI’s own rate-limit docs).
+
+Logs like **`model … does not exist or you do not have access`** mean either wrong model slug **or** the key lacks entitlement.
+
+| Path | What to do |
+| --- | --- |
+| Intended production latency | Upgrade billing / usage tier, then `OPENAI_REALTIME_PIPELINE=translation` plus `OPENAI_TRANSLATION_MODEL=gpt-realtime-translate`. |
+| Dev / capped keys | `OPENAI_REALTIME_PIPELINE=voice` (see `.env.example`) uses **[standard Realtime WS](https://developers.openai.com/api/docs/guides/realtime-websocket)** + interpreter prompting. Latency higher (VAD turn-taking) but usually works without the translation product. Tune `OPENAI_VOICE_VAD_KIND` (`server_vad` vs `semantic_vad`). |
+
+Restart Node after `.env` edits.
+
+---
+
 ## Local development
 
 1. `cp .env.example .env`
@@ -205,7 +220,7 @@ Bonus features wired in README narrative:
 
 Telephony stacks evolve — always confirm **Stream bidirectional + Conference muted** behaviour in your tenant’s Plivo release notes before go-live.
 
-OpenAI model strings change; keep `OPENAI_REALTIME_MODEL` configurable.
+OpenAI model strings change; keep translation + voice model env vars configurable.
 
 ---
 

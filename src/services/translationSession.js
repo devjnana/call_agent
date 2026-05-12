@@ -1,8 +1,11 @@
 import { decodeMuLawToPcm16 } from '../utils/mulaw.js';
 import { pcm8kTo24k, openAiPcmToPlivoMuLaw } from '../utils/audioResample.js';
 import { isLikelySpeech } from '../utils/vad.js';
-import { log } from '../utils/logger.js';
+import { isoToPromptLabel } from '../utils/languageLabels.js';
+import { env } from '../config/index.js';
 import { OpenAiRealtimeTranslation } from '../openai/realtimeTranslation.js';
+import { OpenAiRealtimeVoiceInterpreter } from '../openai/realtimeVoiceInterpreter.js';
+import { log } from '../utils/logger.js';
 
 /**
  * Bridges two muted conference legs with independent OpenAI Realtime translators.
@@ -15,6 +18,8 @@ export class TranslationSession {
    * @param {string} p.customerE164
    * @param {string} p.toAgentTag
    * @param {string} p.toCustomerTag
+   * @param {string} p.agentSpokenApprox ISO-like tag inferred from CRM languages
+   * @param {string} p.customerSpokenApprox ISO-like inferred tag
    */
   constructor(p) {
     this.id = p.id;
@@ -22,6 +27,9 @@ export class TranslationSession {
     this.customerE164 = p.customerE164;
     this.toAgentTag = p.toAgentTag;
     this.toCustomerTag = p.toCustomerTag;
+    /** @see resolveTranslationTargets */
+    this.agentSpokenApprox = p.agentSpokenApprox;
+    this.customerSpokenApprox = p.customerSpokenApprox;
 
     /** @type {string | null} */
     this.agentCallUuid = null;
@@ -38,9 +46,9 @@ export class TranslationSession {
     /** @type {string | null} */
     this.customerStreamId = null;
 
-    /** @type {OpenAiRealtimeTranslation | null} */
+    /** @type {OpenAiRealtimeTranslation | OpenAiRealtimeVoiceInterpreter | null} */
     this.oaiTowardAgent = null;
-    /** @type {OpenAiRealtimeTranslation | null} */
+    /** @type {OpenAiRealtimeTranslation | OpenAiRealtimeVoiceInterpreter | null} */
     this.oaiTowardCustomer = null;
 
     this.customerDialStarted = false;
@@ -69,16 +77,49 @@ export class TranslationSession {
     if (this._openAiWarmed || this.closed) return;
     this._openAiWarmed = true;
 
-    this.oaiTowardAgent = new OpenAiRealtimeTranslation({
-      outputLanguageTag: this.toAgentTag,
-      onDeltaPcm: (pcm24delta) => this.playMuLawOnAgentLeg(pcm24delta),
-      onError: (e) => log.warn('OpenAI cust→agent', this.id, e.message),
-    });
-    this.oaiTowardCustomer = new OpenAiRealtimeTranslation({
-      outputLanguageTag: this.toCustomerTag,
-      onDeltaPcm: (pcm24delta) => this.playMuLawOnCustomerLeg(pcm24delta),
-      onError: (e) => log.warn('OpenAI agent→cust', this.id, e.message),
-    });
+    const pipeline = env.openaiRealtimePipeline;
+    /** @typedef {typeof OpenAiRealtimeTranslation | typeof OpenAiRealtimeVoiceInterpreter} OaiCtor */
+
+    /** @type {OaiCtor} */
+    let TowAgent;
+    /** @type {OaiCtor} */
+    let TowCustomer;
+
+    let argsTowAgent;
+    let argsTowCust;
+
+    if (pipeline === 'voice') {
+      TowAgent = OpenAiRealtimeVoiceInterpreter;
+      TowCustomer = OpenAiRealtimeVoiceInterpreter;
+      argsTowAgent = {
+        sourceLabel: isoToPromptLabel(this.customerSpokenApprox),
+        targetLabel: isoToPromptLabel(this.toAgentTag),
+        onDeltaPcm: (pcm24delta) => this.playMuLawOnAgentLeg(pcm24delta),
+        onError: (e) => log.warn('OpenAI cust→agent', this.id, e.message),
+      };
+      argsTowCust = {
+        sourceLabel: isoToPromptLabel(this.agentSpokenApprox),
+        targetLabel: isoToPromptLabel(this.toCustomerTag),
+        onDeltaPcm: (pcm24delta) => this.playMuLawOnCustomerLeg(pcm24delta),
+        onError: (e) => log.warn('OpenAI agent→cust', this.id, e.message),
+      };
+    } else {
+      TowAgent = OpenAiRealtimeTranslation;
+      TowCustomer = OpenAiRealtimeTranslation;
+      argsTowAgent = {
+        outputLanguageTag: this.toAgentTag,
+        onDeltaPcm: (pcm24delta) => this.playMuLawOnAgentLeg(pcm24delta),
+        onError: (e) => log.warn('OpenAI cust→agent', this.id, e.message),
+      };
+      argsTowCust = {
+        outputLanguageTag: this.toCustomerTag,
+        onDeltaPcm: (pcm24delta) => this.playMuLawOnCustomerLeg(pcm24delta),
+        onError: (e) => log.warn('OpenAI agent→cust', this.id, e.message),
+      };
+    }
+
+    this.oaiTowardAgent = new TowAgent(argsTowAgent);
+    this.oaiTowardCustomer = new TowCustomer(argsTowCust);
 
     this.oaiTowardAgent.connect();
     this.oaiTowardCustomer.connect();

@@ -18,6 +18,12 @@ function normalizeBaseUrl(url) {
   return (url || '').replace(/\/$/, '');
 }
 
+function normalizePipeline(v) {
+  const k = String(v || '').trim().toLowerCase();
+  if (k === 'voice' || k === 'interpreter') return 'voice';
+  return 'translation';
+}
+
 export const env = {
   port: reqNum('PORT', 3000),
   /** HTTPS base for Plivo answer/hangup webhooks */
@@ -25,7 +31,19 @@ export const env = {
   /** WSS origin for bidirectional streams (must be reachable by Plivo) */
   wsBaseUrl: normalizeBaseUrl(req('WS_BASE_URL', 'ws://127.0.0.1:3000')),
   openaiApiKey: req('OPENAI_API_KEY'),
-  openaiRealtimeModel: req('OPENAI_REALTIME_MODEL', 'gpt-realtime-translate'),
+  /**
+   * `translation`: `/v1/realtime/translations` + `gpt-realtime-translate` (needs paid tier · not FREE).
+   * `voice`: `/v1/realtime` + `OPENAI_VOICE_REALTIME_MODEL` (interpreter persona · turn-based VAD · higher latency).
+   */
+  openaiRealtimePipeline: normalizePipeline(req('OPENAI_REALTIME_PIPELINE')),
+  openaiTranslationModel: req(
+    'OPENAI_TRANSLATION_MODEL',
+    req('OPENAI_REALTIME_MODEL', 'gpt-realtime-translate'),
+  ),
+  /** Used when OPENAI_REALTIME_PIPELINE=voice */
+  openaiVoiceRealtimeModel: req('OPENAI_VOICE_REALTIME_MODEL', 'gpt-realtime-2'),
+  /** `semantic_vad` or `server_vad` · voice pipeline only */
+  openaiVoiceVadKind: req('OPENAI_VOICE_VAD_KIND', 'server_vad'),
   openaiSafetyIdentifier: req('OPENAI_SAFETY_IDENTIFIER', ''),
   plivoAuthId: req('PLIVO_AUTH_ID'),
   plivoAuthToken: req('PLIVO_AUTH_TOKEN'),
@@ -46,5 +64,16 @@ export function assertEnvForRuntime() {
   if (!env.wsBaseUrl) missing.push('WS_BASE_URL');
   if (missing.length) {
     console.warn(`[boot] Missing env (some features offline): ${missing.join(', ')}`);
+  }
+
+  const p = env.openaiRealtimePipeline;
+  if (p === 'voice') {
+    console.info(
+      `[boot] OPENAI_REALTIME_PIPELINE=voice • model=${env.openaiVoiceRealtimeModel} (standard Realtime; interpreter prompting; VAD=${env.openaiVoiceVadKind})`,
+    );
+  } else {
+    console.info(
+      `[boot] OPENAI_REALTIME_PIPELINE=translation • model=${env.openaiTranslationModel} (/v1/realtime/translations — requires billed access; GPT Realtime Translate is unavailable on FREE tier per OpenAI docs)`,
+    );
   }
 }

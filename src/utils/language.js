@@ -62,5 +62,28 @@ export function resolveTranslationTargets(agent_language, customer_language) {
     toCustomerTag = custTag;
   }
 
-  return { toAgentTag, toCustomerTag };
+  const agentSpeak =
+    agentTag !== 'auto'
+      ? agentTag
+      : custTag === 'hi'
+        ? 'en'
+        : custTag === 'en'
+          ? 'hi'
+          : 'en';
+
+  const custSpeak =
+    custTag !== 'auto'
+      ? custTag
+      : agentTag === 'en'
+        ? 'hi'
+        : agentTag === 'hi'
+          ? 'en'
+          : 'hi';
+
+  return {
+    toAgentTag,
+    toCustomerTag,
+    agentSpokenApprox: agentSpeak,
+    customerSpokenApprox: custSpeak,
+  };
 }

@@ -28,7 +28,7 @@ export class OpenAiRealtimeTranslation {
   connect() {
     if (this.ws || this.closed) return;
 
-    const model = encodeURIComponent(env.openaiRealtimeModel);
+    const model = encodeURIComponent(env.openaiTranslationModel);
     const uri = `wss://api.openai.com/v1/realtime/translations?model=${model}`;
     const headers = {
       Authorization: `Bearer ${env.openaiApiKey}`,
