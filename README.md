@@ -48,14 +48,18 @@ See `.env.example`. Required for production-grade runs:
 | `BASE_URL` | Public base for `/plivo/webhook/*` URLs |
 | `WS_BASE_URL` | Public websocket origin for streamed calls |
 | `PLIVO_AUTH_ID` · `PLIVO_AUTH_TOKEN` | REST credential pair |
-| `PLIVO_PHONE_NUMBER` | Caller-ID / source number |
+| `PLIVO_PHONE_NUMBER` | Caller-ID / source number (E.164) |
 | `OPENAI_API_KEY` | Bearer token |
-| `OPENAI_REALTIME_MODEL` | Default `gpt-realtime-translate` |
+| `OPENAI_REALTIME_PIPELINE` | `translation` · `voice` — voice uses `/v1/realtime` interpreter mode when translation SKU is unavailable |
+| `OPENAI_TRANSLATION_MODEL` | `/v1/realtime/translations` model (default `gpt-realtime-translate`); legacy **`OPENAI_REALTIME_MODEL`** still works |
+| `OPENAI_VOICE_REALTIME_MODEL` | Primary **`/v1/realtime`** model for voice pipeline — default **`gpt-4o-realtime-preview`** ([model card](https://developers.openai.com/api/docs/models/gpt-4o-realtime-preview)) |
+| `OPENAI_VOICE_REALTIME_MODEL_FALLBACKS` | Comma-separated fallback slugs if OpenAI denies the primary (defaults to dated **`gpt-4o-realtime-preview-*`** snapshots) |
 
 Optional tuning:
 
 | Name | Meaning |
 | --- | --- |
+| `OPENAI_VOICE_VAD_KIND` | `server_vad` \| `semantic_vad` (default `server_vad`) |
 | `PLIVO_VALIDATE_SIGNATURES` | `true` verifies `X-Plivo-Signature-V2*` REST callbacks (**default `false`** for faster dev) |
 | `CUSTOMER_DIAL_DELAY_MS` | Pause before second outbound leg (default `400`) |
 | `SESSION_IDLE_TTL_MS` | In-memory eviction guard |

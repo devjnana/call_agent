@@ -24,6 +24,34 @@ function normalizePipeline(v) {
   return 'translation';
 }
 
+/**
+ * Voice interpreter connects to `wss://api.openai.com/v1/realtime?model=…`.
+ * Default: **gpt-4o-realtime-preview** — widely available; fast/accurate audio on standard Realtime API.
+ *
+ * @see https://developers.openai.com/api/docs/models/gpt-4o-realtime-preview
+ */
+function buildOpenAiVoiceModelChain() {
+  const primary = req('OPENAI_VOICE_REALTIME_MODEL', 'gpt-4o-realtime-preview');
+  const fallbacks = req(
+    'OPENAI_VOICE_REALTIME_MODEL_FALLBACKS',
+    'gpt-4o-realtime-preview-2025-06-03,gpt-4o-realtime-preview-2024-12-17,gpt-4o-realtime-preview-2024-10-01',
+  );
+  const parts = [primary, ...String(fallbacks).split(',')]
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const seen = new Set();
+  const out = [];
+  for (const p of parts) {
+    if (!seen.has(p)) {
+      seen.add(p);
+      out.push(p);
+    }
+  }
+  return out.length ? out : ['gpt-4o-realtime-preview'];
+}
+
+const _voiceChain = buildOpenAiVoiceModelChain();
+
 export const env = {
   port: reqNum('PORT', 3000),
   /** HTTPS base for Plivo answer/hangup webhooks */
@@ -33,15 +61,17 @@ export const env = {
   openaiApiKey: req('OPENAI_API_KEY'),
   /**
    * `translation`: `/v1/realtime/translations` + `gpt-realtime-translate` (needs paid tier · not FREE).
-   * `voice`: `/v1/realtime` + `OPENAI_VOICE_REALTIME_MODEL` (interpreter persona · turn-based VAD · higher latency).
+   * `voice`: `/v1/realtime` + model chain (interpreter persona · turn-based VAD).
    */
   openaiRealtimePipeline: normalizePipeline(req('OPENAI_REALTIME_PIPELINE')),
   openaiTranslationModel: req(
     'OPENAI_TRANSLATION_MODEL',
     req('OPENAI_REALTIME_MODEL', 'gpt-realtime-translate'),
   ),
-  /** Used when OPENAI_REALTIME_PIPELINE=voice */
-  openaiVoiceRealtimeModel: req('OPENAI_VOICE_REALTIME_MODEL', 'gpt-realtime-2'),
+  /** Ordered list for voice interpreter (primary OPENAI_VOICE_REALTIME_MODEL + fallbacks). */
+  openaiVoiceModelChain: _voiceChain,
+  /** First model in `openaiVoiceModelChain` — backwards compat / quick logs */
+  openaiVoiceRealtimeModel: _voiceChain[0],
   /** `semantic_vad` or `server_vad` · voice pipeline only */
   openaiVoiceVadKind: req('OPENAI_VOICE_VAD_KIND', 'server_vad'),
   openaiSafetyIdentifier: req('OPENAI_SAFETY_IDENTIFIER', ''),
@@ -69,7 +99,7 @@ export function assertEnvForRuntime() {
   const p = env.openaiRealtimePipeline;
   if (p === 'voice') {
     console.info(
-      `[boot] OPENAI_REALTIME_PIPELINE=voice • model=${env.openaiVoiceRealtimeModel} (standard Realtime; interpreter prompting; VAD=${env.openaiVoiceVadKind})`,
+      `[boot] OPENAI_REALTIME_PIPELINE=voice • models (try until one accepts): ${env.openaiVoiceModelChain.join(' → ')} · VAD=${env.openaiVoiceVadKind}`,
     );
   } else {
     console.info(

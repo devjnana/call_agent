@@ -2,8 +2,11 @@
  * Standard Realtime API (`/v1/realtime`) with interpreter prompting when
  * `/v1/realtime/translations` + `gpt-realtime-translate` is unavailable (e.g. FREE tier accounts).
  *
+ * Tries `env.openaiVoiceModelChain` in order when OpenAI returns model access errors.
+ *
  * @see https://developers.openai.com/api/docs/guides/realtime-conversations
  * @see https://developers.openai.com/api/docs/guides/realtime-websocket
+ * @see https://developers.openai.com/api/docs/models/gpt-4o-realtime-preview
  */
 import WebSocket from 'ws';
 import { env } from '../config/index.js';
@@ -20,11 +23,21 @@ function vadBlock() {
   };
 }
 
+/** Server error JSON when a model slug is not entitled. */
+function isModelAccessDenied(text) {
+  const t = String(text || '').toLowerCase();
+  return (
+    t.includes('does not exist') ||
+    t.includes('you do not have access') ||
+    (t.includes('model') && t.includes('access'))
+  );
+}
+
 export class OpenAiRealtimeVoiceInterpreter {
   /**
    * @param {object} opts
-   * @param {string} opts.sourceLabel — spoken language entering this socket leg
-   * @param {string} opts.targetLabel — language the callee must hear over the bridge
+   * @param {string} opts.sourceLabel
+   * @param {string} opts.targetLabel
    * @param {(pcm24k: Buffer) => void} opts.onDeltaPcm
    * @param {(err: Error) => void} [opts.onError]
    */
@@ -33,27 +46,8 @@ export class OpenAiRealtimeVoiceInterpreter {
     this.targetLabel = opts.targetLabel;
     this.onDeltaPcm = opts.onDeltaPcm;
     this.onError = opts.onError || ((_e) => {});
-    /** @type {WebSocket | null} */
-    this.ws = null;
-    this.connected = false;
-    this.closed = false;
-    this.queue = [];
-  }
 
-  connect() {
-    if (this.ws || this.closed) return;
-
-    const model = encodeURIComponent(env.openaiVoiceRealtimeModel);
-    const uri = `wss://api.openai.com/v1/realtime?model=${model}`;
-    const headers = {
-      Authorization: `Bearer ${env.openaiApiKey}`,
-    };
-    if (env.openaiSafetyIdentifier) {
-      headers['OpenAI-Safety-Identifier'] = env.openaiSafetyIdentifier;
-    }
-    this.ws = new WebSocket(uri, { headers });
-
-    const instructions = [
+    this.instructions = [
       'You interpret a LIVE telephone PSTN stereo leg — one human speaker at a time.',
       `Speaker usually talks ${this.sourceLabel}. Speak ONLY fluent ${this.targetLabel} interpretations.`,
       'Output modality = short spoken interpretations only.',
@@ -62,6 +56,63 @@ export class OpenAiRealtimeVoiceInterpreter {
       'Treat quiet audio as silence; translate every speech segment eagerly after natural pauses (server VAD).',
       `If fragments are partial, synthesize coherent ${this.targetLabel} that matches audible intent.`,
     ].join('\n');
+
+    /** @type {WebSocket | null} */
+    this.ws = null;
+    this.connected = false;
+    this.closed = false;
+    this.queue = [];
+
+    /** @type {string[] | null} */
+    this.chain = null;
+    this.chainIndex = 0;
+  }
+
+  connect() {
+    if (this.closed || this.ws) return;
+    this.chain = env.openaiVoiceModelChain.slice();
+    this.chainIndex = 0;
+    this.attemptConnect();
+  }
+
+  tearDownSocketOnly() {
+    if (!this.ws) return;
+    try {
+      this.ws.removeAllListeners();
+    } catch (_) {}
+    try {
+      this.ws.close();
+    } catch (_) {}
+    this.ws = null;
+    this.connected = false;
+  }
+
+  attemptConnect() {
+    if (this.closed) return;
+    this.tearDownSocketOnly();
+
+    if (!this.chain || this.chainIndex >= this.chain.length) {
+      this.onError(
+        new Error(
+          'No usable OpenAI voice Realtime model — set OPENAI_VOICE_REALTIME_MODEL / FALLBACKS in .env (see README).',
+        ),
+      );
+      return;
+    }
+
+    const modelName = this.chain[this.chainIndex];
+    const model = encodeURIComponent(modelName);
+    const uri = `wss://api.openai.com/v1/realtime?model=${model}`;
+    const headers = {
+      Authorization: `Bearer ${env.openaiApiKey}`,
+    };
+    if (env.openaiSafetyIdentifier) {
+      headers['OpenAI-Safety-Identifier'] = env.openaiSafetyIdentifier;
+    }
+
+    log.info(`[engine] Voice interpreter WebSocket → model=${modelName}`);
+
+    this.ws = new WebSocket(uri, { headers });
 
     this.ws.on('open', () => {
       if (this.closed) {
@@ -75,7 +126,7 @@ export class OpenAiRealtimeVoiceInterpreter {
         type: 'session.update',
         session: {
           type: 'realtime',
-          instructions,
+          instructions: this.instructions,
           output_modalities: ['audio'],
           audio: {
             input: {
@@ -112,6 +163,14 @@ export class OpenAiRealtimeVoiceInterpreter {
         case 'error':
           {
             const errMsg = msg.error?.message || JSON.stringify(msg.error || msg);
+            if (isModelAccessDenied(errMsg) && this.chain && this.chainIndex < this.chain.length - 1) {
+              this.chainIndex += 1;
+              log.warn(
+                `[engine] Model rejected (${errMsg.slice(0, 120)}…); retrying with ${this.chain[this.chainIndex]}`,
+              );
+              setImmediate(() => this.attemptConnect());
+              return;
+            }
             log.warn('OpenAI voice interpreter:', errMsg);
             this.onError(new Error(errMsg));
           }
@@ -153,10 +212,6 @@ export class OpenAiRealtimeVoiceInterpreter {
 
   close() {
     this.closed = true;
-    try {
-      this.ws?.close();
-    } catch (_) {}
-    this.ws = null;
-    this.connected = false;
+    this.tearDownSocketOnly();
   }
 }
