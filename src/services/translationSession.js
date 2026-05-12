@@ -11,8 +11,20 @@ import { log } from '../utils/logger.js';
 /** Chunk TTS PCM for Plivo playAudio frames (~75ms at 24kHz mono s16le). */
 const PLAY_PCM24_CHUNK_BYTES = 3600;
 
-function sendPcm24ToPlivo(ws, pcm24kDelta) {
-  if (!ws || ws.readyState !== 1 || !pcm24kDelta.length) return;
+function sendPcm24ToPlivo(ws, pcm24kDelta, troubleshootCtx) {
+  const troubleshoot =
+    env.openaiRealtimePipeline === 'sarvam_eleven' && env.pipelineTroubleshootLog;
+  const sid = troubleshootCtx?.sessionId;
+  const listener = troubleshootCtx?.listenerLeg;
+  if (!ws || ws.readyState !== 1 || !pcm24kDelta?.length) {
+    if (troubleshoot && pcm24kDelta?.length) {
+      log.warn(
+        `[engine] playAudio skipped session=${sid} listener=${listener} wsReady=${ws?.readyState} pcm24_bytes=${pcm24kDelta.length}`,
+      );
+    }
+    return;
+  }
+  let frames = 0;
   for (let i = 0; i < pcm24kDelta.length; i += PLAY_PCM24_CHUNK_BYTES) {
     const slice = pcm24kDelta.subarray(
       i,
@@ -28,6 +40,12 @@ function sendPcm24ToPlivo(ws, pcm24kDelta) {
           payload: mu,
         },
       }),
+    );
+    frames += 1;
+  }
+  if (troubleshoot) {
+    log.info(
+      `[engine] playAudio ok session=${sid} listener=${listener} pcm24_bytes=${pcm24kDelta.length} mulaw_chunks=${frames}`,
     );
   }
 }
@@ -83,6 +101,8 @@ export class TranslationSession {
     this.destroyListeners = new Set();
     /** @type {boolean} */
     this._openAiWarmed = false;
+    /** @type {Set<string>} */
+    this._trFirstMediaLog = new Set();
   }
 
   idleMs() {
@@ -204,6 +224,17 @@ export class TranslationSession {
 
     if (mulawPayload.length === 0) return;
 
+    if (
+      env.openaiRealtimePipeline === 'sarvam_eleven' &&
+      env.pipelineTroubleshootLog &&
+      !this._trFirstMediaLog.has(spokeRole)
+    ) {
+      this._trFirstMediaLog.add(spokeRole);
+      log.info(
+        `[engine] Plivo media first packet session=${this.id} speaker_leg=${spokeRole} mulaw_bytes=${mulawPayload.length} likely_speech_energy=${isLikelySpeech(mulawPayload)}`,
+      );
+    }
+
     if (spokeRole === 'agent' && this.agentStreamId && isLikelySpeech(mulawPayload)) {
       this.clearPlivoPlaybackForListener('customer', this.customerStreamId);
     }
@@ -225,11 +256,17 @@ export class TranslationSession {
    * @param {Buffer} pcm24kDelta mono int16 LE (OpenAI deltas)
    */
   playMuLawOnAgentLeg(pcm24kDelta) {
-    sendPcm24ToPlivo(this.agentPlivoWs, pcm24kDelta);
+    sendPcm24ToPlivo(this.agentPlivoWs, pcm24kDelta, {
+      sessionId: this.id,
+      listenerLeg: 'agent',
+    });
   }
 
   playMuLawOnCustomerLeg(pcm24kDelta) {
-    sendPcm24ToPlivo(this.customerPlivoWs, pcm24kDelta);
+    sendPcm24ToPlivo(this.customerPlivoWs, pcm24kDelta, {
+      sessionId: this.id,
+      listenerLeg: 'customer',
+    });
   }
 
   /**

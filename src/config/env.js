@@ -111,6 +111,12 @@ export const env = {
    */
   pipelineMaxHoldBeforeFlushMs: reqNum('PIPELINE_MAX_HOLD_BEFORE_FLUSH_MS', 3200),
 
+  /** Sarvam+11 milestones: flush, STT/TTS/playAudio skips. Default true; set PIPELINE_TROUBLESHOOT_LOG=false to mute. */
+  pipelineTroubleshootLog:
+    String(req('PIPELINE_TROUBLESHOOT_LOG', 'true')).toLowerCase() === 'true',
+  /** Frequent RMS / buffer dumps (PIPELINE_VERBOSE_LOG=true). */
+  pipelineVerboseLog: String(req('PIPELINE_VERBOSE_LOG', 'false')).toLowerCase() === 'true',
+
   /**
    * Per-listener voice: `ELEVENLABS_VOICE_EN`, `ELEVENLABS_VOICE_HI`, … else `ELEVENLABS_VOICE_ID`.
    * @param {string} [iso639]
@@ -148,6 +154,12 @@ export function assertEnvForRuntime() {
     );
     if (!env.sarvamApiKey) console.warn('[boot] SARVAM_API_KEY missing — pipeline will error until set');
     if (!env.elevenlabsApiKey) console.warn('[boot] ELEVENLABS_API_KEY missing — pipeline will error until set');
+    if (env.pipelineTroubleshootLog) {
+      console.info('[boot] PIPELINE_TROUBLESHOOT_LOG=true — Sarvam+11 will log flush/STT/TTS/playAudio details');
+    }
+    if (env.pipelineVerboseLog) {
+      console.info('[boot] PIPELINE_VERBOSE_LOG=true — extra per-chunk RMS logs');
+    }
   } else {
     console.info(
       `[boot] OPENAI_REALTIME_PIPELINE=translation • model=${env.openaiTranslationModel} (/v1/realtime/translations — requires billed access; GPT Realtime Translate is unavailable on FREE tier per OpenAI docs)`,
