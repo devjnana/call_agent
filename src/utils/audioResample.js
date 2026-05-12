@@ -18,15 +18,22 @@ export function pcm8kTo24k(pcm8k) {
 }
 
 /**
- * Downsample 24 kHz PCM16 LE mono to 8 kHz (pick every third sample).
+ * Downsample 24 kHz PCM16 LE mono to 8 kHz for Plivo 8 kHz playout.
+ * Uses a 3-sample boxcar (moving average) before 3:1 decimation to reduce aliasing vs naive pick-every-3rd-sample.
  */
 export function pcm24kTo8k(pcm24k) {
+  if (!pcm24k || pcm24k.length < 6) return Buffer.alloc(0);
   const nInSamples = pcm24k.length >>> 1;
   const outSampleCount = Math.floor(nInSamples / 3);
   const out = Buffer.allocUnsafe(outSampleCount * 2);
   for (let i = 0; i < outSampleCount; i++) {
-    const srcIdx = i * 3;
-    out.writeInt16LE(pcm24k.readInt16LE(srcIdx * 2), i * 2);
+    const b = i * 6;
+    const s0 = pcm24k.readInt16LE(b);
+    const s1 = pcm24k.readInt16LE(b + 2);
+    const s2 = pcm24k.readInt16LE(b + 4);
+    const v = Math.round((s0 + s1 + s2) / 3);
+    const clamped = v < -32768 ? -32768 : v > 32767 ? 32767 : v;
+    out.writeInt16LE(clamped, i * 2);
   }
   return out;
 }

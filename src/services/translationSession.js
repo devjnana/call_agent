@@ -126,8 +126,9 @@ export class TranslationSession {
     this._pendingTtsAgent = [];
     this._pendingTtsCustomer = [];
     /** @type {boolean} */
-    this._playDeferredLoggedAgent = false;
-    this._playDeferredLoggedCustomer = false;
+    /** Int16 fragments held until we have full 24 kHz sample triplets for clean 24k→8k downsample */
+    this._ttsPcm24TailAgent = Buffer.alloc(0);
+    this._ttsPcm24TailCustomer = Buffer.alloc(0);
   }
 
   idleMs() {
@@ -341,25 +342,47 @@ export class TranslationSession {
   }
 
   /**
+   * Carry partial PCM across TTS chunks so 24 kHz s16le stays sample-aligned for 3:1 decimation to 8 kHz.
+   * @param {"agent"|"customer"} leg
+   * @param {Buffer} pcm24kDelta
+   * @returns {Buffer}
+   */
+  _normalizeTtsPcm24ForPlivo(leg, pcm24kDelta) {
+    if (!pcm24kDelta?.length) return Buffer.alloc(0);
+    const key = leg === 'agent' ? '_ttsPcm24TailAgent' : '_ttsPcm24TailCustomer';
+    const merged = Buffer.concat([this[key], pcm24kDelta]);
+    let L = merged.length;
+    if (L < 2) {
+      this[key] = merged;
+      return Buffer.alloc(0);
+    }
+    if (L % 2 === 1) L -= 1;
+    const n6 = Math.floor(L / 6) * 6;
+    this[key] = merged.subarray(n6);
+    return n6 > 0 ? merged.subarray(0, n6) : Buffer.alloc(0);
+  }
+
+  /**
    * @param {Buffer} pcm24kDelta mono int16 LE (OpenAI deltas)
    */
   playMuLawOnAgentLeg(pcm24kDelta) {
+    const pcm = this._normalizeTtsPcm24ForPlivo('agent', pcm24kDelta);
+    if (!pcm.length) return;
     const useMulaw = env.plivoStreamUsesMulaw;
     if (!this.agentStreamId) {
-      if (pcm24kDelta?.length) this._pendingTtsAgent.push(pcm24kDelta);
+      this._pendingTtsAgent.push(pcm);
       if (
         env.pipelineTroubleshootLog &&
-        pcm24kDelta?.length &&
         !this._playDeferredLoggedAgent
       ) {
         this._playDeferredLoggedAgent = true;
         log.warn(
-          `[engine] playAudio queued until streamId session=${this.id} listener=agent pcm24_bytes=${pcm24kDelta.length}`,
+          `[engine] playAudio queued until streamId session=${this.id} listener=agent pcm24_bytes=${pcm.length}`,
         );
       }
       return;
     }
-    sendPcm24ToPlivo(this.agentPlivoWs, pcm24kDelta, {
+    sendPcm24ToPlivo(this.agentPlivoWs, pcm, {
       sessionId: this.id,
       listenerLeg: 'agent',
       streamId: this.agentStreamId,
@@ -368,22 +391,23 @@ export class TranslationSession {
   }
 
   playMuLawOnCustomerLeg(pcm24kDelta) {
+    const pcm = this._normalizeTtsPcm24ForPlivo('customer', pcm24kDelta);
+    if (!pcm.length) return;
     const useMulaw = env.plivoStreamUsesMulaw;
     if (!this.customerStreamId) {
-      if (pcm24kDelta?.length) this._pendingTtsCustomer.push(pcm24kDelta);
+      this._pendingTtsCustomer.push(pcm);
       if (
         env.pipelineTroubleshootLog &&
-        pcm24kDelta?.length &&
         !this._playDeferredLoggedCustomer
       ) {
         this._playDeferredLoggedCustomer = true;
         log.warn(
-          `[engine] playAudio queued until streamId session=${this.id} listener=customer pcm24_bytes=${pcm24kDelta.length}`,
+          `[engine] playAudio queued until streamId session=${this.id} listener=customer pcm24_bytes=${pcm.length}`,
         );
       }
       return;
     }
-    sendPcm24ToPlivo(this.customerPlivoWs, pcm24kDelta, {
+    sendPcm24ToPlivo(this.customerPlivoWs, pcm, {
       sessionId: this.id,
       listenerLeg: 'customer',
       streamId: this.customerStreamId,
@@ -431,6 +455,8 @@ export class TranslationSession {
     } catch (_) {}
     this.oaiTowardAgent = null;
     this.oaiTowardCustomer = null;
+    this._ttsPcm24TailAgent = Buffer.alloc(0);
+    this._ttsPcm24TailCustomer = Buffer.alloc(0);
     for (const cb of [...this.destroyListeners]) {
       try {
         cb();

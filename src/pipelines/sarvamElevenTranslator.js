@@ -360,20 +360,28 @@ export class SarvamElevenTranslator {
     const reader = el.body?.getReader();
     if (!reader) {
       const buf = Buffer.from(await el.arrayBuffer());
-      if (buf.length) this.onDeltaPcm(buf);
+      let b = buf;
+      if (b.length % 2 === 1) b = b.subarray(0, b.length - 1);
+      if (b.length) this.onDeltaPcm(b);
       if (env.pipelineTroubleshootLog) {
         log.info(`Sarvam+11 [${this.label}] ElevenLabs body (non-stream) pcm24_bytes=${buf.length}`);
       }
       return;
     }
 
+    /** Carry split int16 samples across fetch chunks (avoids misaligned PCM → noise/clicks). */
+    let pcmCarry = Buffer.alloc(0);
     let streamed = 0;
     while (!this.closed) {
       const { done, value } = await reader.read();
       if (done) break;
       if (value && value.length) {
         streamed += value.length;
-        this.onDeltaPcm(Buffer.from(value));
+        let merged = Buffer.concat([pcmCarry, Buffer.from(value)]);
+        const even = merged.length & ~1;
+        pcmCarry = merged.subarray(even);
+        merged = merged.subarray(0, even);
+        if (merged.length) this.onDeltaPcm(merged);
       }
     }
     if (env.pipelineTroubleshootLog) {
