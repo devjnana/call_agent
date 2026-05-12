@@ -27,9 +27,15 @@ export function normalizeLanguage(label) {
 }
 
 /**
- * Derive OpenAI output languages for both directions from CRM language fields.
- * - Customer audio → translated audio the agent hears: target = agent_language
- * - Agent audio → translated audio the customer hears: target = customer_language
+ * Derive per-direction **translation output** languages from CRM fields.
+ *
+ * Meaning of the CRM fields (keep these exact names in your JSON):
+ * - **`agent_language`** — language the **agent should hear** on their phone (and the language we treat the agent as speaking when not using `auto`).
+ * - **`customer_language`** — language the **customer should hear** (and the language we treat the customer as speaking when not using `auto`).
+ *
+ * Example: `"agent_language": "english"`, `"customer_language": "hindi"`
+ * - Customer’s mic (Hindi) → translated **into English** → played to the **agent**.
+ * - Agent’s mic (English) → translated **into Hindi** → played to the **customer**.
  *
  * Supports `auto` for one side paired with an explicit opposite language.
  */

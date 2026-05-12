@@ -265,10 +265,18 @@ export class SarvamElevenTranslator {
       );
     }
 
+    // Skip translation only when CRM speaker language and listener target match (same Sarvam locale).
+    // Do **not** skip when STT `language_code === target` — wrong detection skips translation and leaves English text for a Hindi leg.
     let needsTranslate = true;
-    if (detected && detected === targetSarvam) needsTranslate = false;
-    if (!detected && sourceMapped && sourceMapped === targetSarvam) needsTranslate = false;
+    if (sourceMapped && targetSarvam && sourceMapped === targetSarvam) {
+      needsTranslate = false;
+    }
 
+    if (env.pipelineTroubleshootLog) {
+      log.info(
+        `Sarvam+11 [${this.label}] translate_gate needs=${needsTranslate} sourceMapped=${sourceMapped ?? 'null'} target=${targetSarvam} stt_detected=${detected ?? 'null'}`,
+      );
+    }
     let line = raw;
     if (needsTranslate) {
       const trBody = {
