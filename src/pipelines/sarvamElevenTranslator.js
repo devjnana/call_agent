@@ -51,6 +51,11 @@ export class SarvamElevenTranslator {
     const bps = (24000 * 2) / 1000;
     this.minPcmBytes = Math.ceil(bps * env.pipelineMinUtteranceMs);
     this.maxPcmBytes = Math.ceil(bps * env.pipelineMaxUtteranceMs);
+    /** Min RMS over the full pending buffer before max-hold may call STT (blocks noise/silence hallucination loops). */
+    this.maxHoldMinRms =
+      env.pipelineMaxHoldMinRms > 0
+        ? env.pipelineMaxHoldMinRms
+        : Math.max(45, Math.round(this.rmsThreshold * 0.45));
   }
 
   connect() {
@@ -89,7 +94,7 @@ export class SarvamElevenTranslator {
       return;
     }
     log.info(
-      `Sarvam+11 translator ready (${this.label}) · Sarvam=${tgt} · eleven_voice=${String(this.elevenLabsVoiceId).slice(0, 8)}… · rms≥${this.rmsThreshold} silenceMs=${this.silenceMs} minClipMs=${env.pipelineMinUtteranceMs} maxHoldMs=${this.maxHoldMs} troubleshoot=${env.pipelineTroubleshootLog}`,
+      `Sarvam+11 translator ready (${this.label}) · Sarvam=${tgt} · eleven_voice=${String(this.elevenLabsVoiceId).slice(0, 8)}… · rms≥${this.rmsThreshold} silenceMs=${this.silenceMs} minClipMs=${env.pipelineMinUtteranceMs} maxHoldMs=${this.maxHoldMs} maxHoldMinBufRms=${this.maxHoldMinRms} troubleshoot=${env.pipelineTroubleshootLog}`,
     );
   }
 
@@ -140,11 +145,24 @@ export class SarvamElevenTranslator {
       this._bufferStartTs &&
       Date.now() - this._bufferStartTs >= this.maxHoldMs
     ) {
+      const bufRms = pcm16MonoRms(this.buffer);
+      if (bufRms < this.maxHoldMinRms) {
+        if (this._silenceTimer) clearTimeout(this._silenceTimer);
+        this._silenceTimer = null;
+        if (env.pipelineTroubleshootLog) {
+          log.info(
+            `Sarvam+11 [${this.label}] max_hold dropped (quiet buffer) buf_rms=${bufRms.toFixed(1)} need≥${this.maxHoldMinRms}`,
+          );
+        }
+        this.buffer = Buffer.alloc(0);
+        this._bufferStartTs = null;
+        return;
+      }
       if (this._silenceTimer) clearTimeout(this._silenceTimer);
       this._silenceTimer = null;
       if (env.pipelineTroubleshootLog) {
         log.info(
-          `Sarvam+11 [${this.label}] max_hold ${this.maxHoldMs}ms elapsed → flush`,
+          `Sarvam+11 [${this.label}] max_hold ${this.maxHoldMs}ms elapsed → flush buf_rms=${bufRms.toFixed(1)}`,
         );
       }
       this.flushUtterance('max_hold');

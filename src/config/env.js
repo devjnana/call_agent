@@ -129,6 +129,11 @@ export const env = {
    * in the buffer so Sarvam STT still runs.
    */
   pipelineMaxHoldBeforeFlushMs: reqNum('PIPELINE_MAX_HOLD_BEFORE_FLUSH_MS', 3200),
+  /**
+   * Sarvam+11: min whole-buffer RMS (int16) before max-hold can run STT. Stops silence/comfort-noise
+   * from being sent every PIPELINE_MAX_HOLD_BEFORE_FLUSH_MS (avoids repeated bogus TTS). 0 = auto from PIPELINE_UTTERANCE_RMS.
+   */
+  pipelineMaxHoldMinRms: reqNum('PIPELINE_MAX_HOLD_MIN_RMS', 0),
 
   /** Sarvam+11 milestones: flush, STT/TTS/playAudio skips. Default true; set PIPELINE_TROUBLESHOOT_LOG=false to mute. */
   pipelineTroubleshootLog:
