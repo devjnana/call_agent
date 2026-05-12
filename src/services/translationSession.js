@@ -255,13 +255,14 @@ export class TranslationSession {
    * @param {import('ws').WebSocket} ws
    */
   onPlivoStreamStart(leg, start, ws) {
-    const enc = String(start?.mediaFormat?.encoding || '').toLowerCase();
+    const s = start && typeof start === 'object' ? start : {};
+    const mf = s.mediaFormat || s.media_format || {};
+    const enc = String(mf.encoding || '').toLowerCase();
     if (enc.includes('mulaw')) this.inboundCodec[leg] = 'mulaw';
     else if (enc) this.inboundCodec[leg] = 'l16';
 
-    this.attachPlivoSocket(leg, ws, {
-      streamId: start?.streamId || null,
-    });
+    const streamId = s.streamId || s.stream_uuid || s.streamID || null;
+    this.attachPlivoSocket(leg, ws, { streamId });
   }
 
   /**

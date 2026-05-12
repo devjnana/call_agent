@@ -73,6 +73,13 @@ export function attachPlivoMediaWs(server, registry) {
       return;
     }
 
+    const fwd = request.headers['x-forwarded-for'];
+    const clientIp =
+      (typeof fwd === 'string' && fwd.split(',')[0]?.trim()) ||
+      request.socket?.remoteAddress ||
+      '?';
+    log.info('[plivo-ws] upgrade /ws/plivo from', clientIp);
+
     if (!verifyPlivoWsHandshake(request)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
@@ -137,11 +144,23 @@ export function attachPlivoMediaWs(server, registry) {
           break;
 
         case 'media': {
-          if (!evt.media?.payload) return;
-          sess.ingestPlivoMedia(
-            leg,
-            Buffer.from(evt.media.payload, 'base64'),
-          );
+          const b64 =
+            evt.media?.payload ??
+            evt.Media?.payload ??
+            evt.payload ??
+            null;
+          if (!b64) {
+            if (env.pipelineTroubleshootLog) {
+              log.warn('Plivo media frame missing payload keys', sess.id, leg, Object.keys(evt));
+            }
+            return;
+          }
+          /** Plivo protocol puts `streamId` on every media chunk — we need it if `start` was delayed or skipped. */
+          const sid = evt.streamId ?? evt.stream_id;
+          if (sid) {
+            sess.attachPlivoSocket(leg, ws, { streamId: String(sid) });
+          }
+          sess.ingestPlivoMedia(leg, Buffer.from(b64, 'base64'));
           break;
         }
 
@@ -150,6 +169,9 @@ export function attachPlivoMediaWs(server, registry) {
           break;
 
         default:
+          if (env.pipelineTroubleshootLog && evt.event) {
+            log.warn('Plivo WS unhandled event', sess.id, leg, evt.event, Object.keys(evt));
+          }
           break;
       }
     });
