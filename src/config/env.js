@@ -100,10 +100,16 @@ export const env = {
   elevenlabsApiKey: req('ELEVENLABS_API_KEY'),
   elevenlabsTtsModel: req('ELEVENLABS_TTS_MODEL', 'eleven_flash_v2_5'),
   /** Utterance chunking for REST STT (RMS silence gate, Plivo 8 kHz upsampled to 24 kHz). */
-  pipelineUtteranceSilenceMs: reqNum('PIPELINE_UTTERANCE_SILENCE_MS', 480),
-  pipelineMinUtteranceMs: reqNum('PIPELINE_MIN_UTTERANCE_MS', 180),
+  pipelineUtteranceSilenceMs: reqNum('PIPELINE_UTTERANCE_SILENCE_MS', 420),
+  pipelineMinUtteranceMs: reqNum('PIPELINE_MIN_UTTERANCE_MS', 100),
   pipelineMaxUtteranceMs: reqNum('PIPELINE_MAX_UTTERANCE_MS', 15000),
-  pipelineUtteranceRmsThreshold: reqNum('PIPELINE_UTTERANCE_RMS', 380),
+  /** Int16 PCM RMS — telco audio is often quiet; 380 was too high and blocked all flushes. */
+  pipelineUtteranceRmsThreshold: reqNum('PIPELINE_UTTERANCE_RMS', 95),
+  /**
+   * If RMS never crosses the threshold (very soft speech), still flush after this many ms of audio
+   * in the buffer so Sarvam STT still runs.
+   */
+  pipelineMaxHoldBeforeFlushMs: reqNum('PIPELINE_MAX_HOLD_BEFORE_FLUSH_MS', 3200),
 
   /**
    * Per-listener voice: `ELEVENLABS_VOICE_EN`, `ELEVENLABS_VOICE_HI`, … else `ELEVENLABS_VOICE_ID`.

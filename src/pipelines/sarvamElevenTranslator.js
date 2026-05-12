@@ -33,8 +33,9 @@ export class SarvamElevenTranslator {
     this.buffer = Buffer.alloc(0);
     this.silenceMs = env.pipelineUtteranceSilenceMs;
     this.rmsThreshold = env.pipelineUtteranceRmsThreshold;
-    /** @type {ReturnType<typeof setTimeout> | null} */
-    this._silenceTimer = null;
+    this.maxHoldMs = env.pipelineMaxHoldBeforeFlushMs;
+    /** When non-buffer became non-empty — for forced flush of quiet speech */
+    this._bufferStartTs = null;
     /** @type {Buffer[]} */
     this.jobQueue = [];
     this._processing = false;
@@ -85,16 +86,31 @@ export class SarvamElevenTranslator {
   appendPcm24kMono(pcm16le24k) {
     if (this.closed || !pcm16le24k.length) return;
 
+    const prevLen = this.buffer.length;
     this.buffer = Buffer.concat([this.buffer, pcm16le24k]);
+    if (prevLen === 0) this._bufferStartTs = Date.now();
+
     if (this.buffer.length > this.maxPcmBytes) {
       const cut = this.buffer.length - this.maxPcmBytes;
       this.buffer = this.buffer.subarray(cut);
+      this._bufferStartTs = Date.now();
     }
 
     const loud = pcm16MonoRms(pcm16le24k) > this.rmsThreshold;
     if (loud) {
       if (this._silenceTimer) clearTimeout(this._silenceTimer);
       this._silenceTimer = setTimeout(() => this.flushUtterance(), this.silenceMs);
+    }
+
+    /* Soft PSTN audio often never crosses a high RMS bar — still cut & send a segment periodically. */
+    if (
+      this.buffer.length >= this.minPcmBytes &&
+      this._bufferStartTs &&
+      Date.now() - this._bufferStartTs >= this.maxHoldMs
+    ) {
+      if (this._silenceTimer) clearTimeout(this._silenceTimer);
+      this._silenceTimer = null;
+      this.flushUtterance();
     }
   }
 
@@ -107,6 +123,7 @@ export class SarvamElevenTranslator {
     if (this.buffer.length < this.minPcmBytes) return;
     const pcm = Buffer.from(this.buffer);
     this.buffer = Buffer.alloc(0);
+    this._bufferStartTs = null;
     this.jobQueue.push(pcm);
     this.drainQueue();
   }
@@ -167,7 +184,10 @@ export class SarvamElevenTranslator {
       throw new Error(`Sarvam STT: invalid JSON ${trText.slice(0, 200)}`);
     }
     const raw = (stt.transcript || '').trim();
-    if (!raw) return;
+    if (!raw) {
+      log.warn(`Sarvam+11 ${this.label}: STT returned empty transcript (check audio / language_code)`);
+      return;
+    }
 
     const sourceMapped = iso639ToSarvam(this.sourceIso639);
     const detected =
@@ -214,9 +234,6 @@ export class SarvamElevenTranslator {
 
     const u = new URL(`https://api.elevenlabs.io/v1/text-to-speech/${this.elevenLabsVoiceId}/stream`);
     u.searchParams.set('output_format', 'pcm_24000');
-    if (env.elevenlabsTtsModel) {
-      u.searchParams.set('model_id', env.elevenlabsTtsModel);
-    }
 
     const el = await fetch(u.toString(), {
       method: 'POST',
@@ -224,7 +241,10 @@ export class SarvamElevenTranslator {
         'xi-api-key': env.elevenlabsApiKey,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ text: line }),
+      body: JSON.stringify({
+        text: line,
+        ...(env.elevenlabsTtsModel ? { model_id: env.elevenlabsTtsModel } : {}),
+      }),
       signal,
     });
     if (!el.ok) {

@@ -8,6 +8,30 @@ import { OpenAiRealtimeVoiceInterpreter } from '../openai/realtimeVoiceInterpret
 import { SarvamElevenTranslator } from '../pipelines/sarvamElevenTranslator.js';
 import { log } from '../utils/logger.js';
 
+/** Chunk TTS PCM for Plivo playAudio frames (~75ms at 24kHz mono s16le). */
+const PLAY_PCM24_CHUNK_BYTES = 3600;
+
+function sendPcm24ToPlivo(ws, pcm24kDelta) {
+  if (!ws || ws.readyState !== 1 || !pcm24kDelta.length) return;
+  for (let i = 0; i < pcm24kDelta.length; i += PLAY_PCM24_CHUNK_BYTES) {
+    const slice = pcm24kDelta.subarray(
+      i,
+      Math.min(i + PLAY_PCM24_CHUNK_BYTES, pcm24kDelta.length),
+    );
+    const mu = openAiPcmToPlivoMuLaw(slice).toString('base64');
+    ws.send(
+      JSON.stringify({
+        event: 'playAudio',
+        media: {
+          contentType: 'audio/x-mulaw',
+          sampleRate: '8000',
+          payload: mu,
+        },
+      }),
+    );
+  }
+}
+
 /**
  * Bridges two muted conference legs with independent realtime translators (OpenAI or Sarvam+ElevenLabs).
  */
@@ -201,29 +225,11 @@ export class TranslationSession {
    * @param {Buffer} pcm24kDelta mono int16 LE (OpenAI deltas)
    */
   playMuLawOnAgentLeg(pcm24kDelta) {
-    if (!this.agentPlivoWs || this.agentPlivoWs.readyState !== 1) return;
-    const mu = openAiPcmToPlivoMuLaw(pcm24kDelta).toString('base64');
-    this.agentPlivoWs.send(JSON.stringify({
-      event: 'playAudio',
-      media: {
-        contentType: 'audio/x-mulaw',
-        sampleRate: '8000',
-        payload: mu,
-      },
-    }));
+    sendPcm24ToPlivo(this.agentPlivoWs, pcm24kDelta);
   }
 
   playMuLawOnCustomerLeg(pcm24kDelta) {
-    if (!this.customerPlivoWs || this.customerPlivoWs.readyState !== 1) return;
-    const mu = openAiPcmToPlivoMuLaw(pcm24kDelta).toString('base64');
-    this.customerPlivoWs.send(JSON.stringify({
-      event: 'playAudio',
-      media: {
-        contentType: 'audio/x-mulaw',
-        sampleRate: '8000',
-        payload: mu,
-      },
-    }));
+    sendPcm24ToPlivo(this.customerPlivoWs, pcm24kDelta);
   }
 
   /**
