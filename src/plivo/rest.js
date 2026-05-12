@@ -55,10 +55,12 @@ export async function originateCall(body) {
  */
 export async function startBidirectionalMuLawStream(callUuid, serviceUrl) {
   const url = `${plivoBaseUrl()}/${callUuid}/Stream/`;
+  const track = String(env.plivoStreamAudioTrack || 'inbound').toLowerCase();
+  const audioTrack = track === 'both' ? 'both' : 'inbound';
   const body = {
     service_url: serviceUrl,
     bidirectional: true,
-    audio_track: 'inbound',
+    audio_track: audioTrack,
     content_type: 'audio/x-mulaw;rate=8000',
   };
   const resp = await fetch(url, {
@@ -75,8 +77,25 @@ export async function startBidirectionalMuLawStream(callUuid, serviceUrl) {
     throw new Error(`Plivo stream failed: HTTP ${resp.status}`);
   }
   try {
-    return JSON.parse(text);
+    const j = JSON.parse(text);
+    log.info(
+      'Plivo Stream/ OK',
+      'call',
+      String(callUuid).slice(0, 8) + '…',
+      'audio_track=',
+      audioTrack,
+      'stream_id=',
+      j.stream_id ?? j.stream_uuid ?? '?',
+      'service_url=',
+      String(serviceUrl).slice(0, 72) + (String(serviceUrl).length > 72 ? '…' : ''),
+    );
+    return j;
   } catch {
+    log.info(
+      'Plivo Stream/ OK (non-JSON)',
+      String(callUuid).slice(0, 8) + '…',
+      String(serviceUrl).slice(0, 64),
+    );
     return { raw: text };
   }
 }

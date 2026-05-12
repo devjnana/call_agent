@@ -24,7 +24,7 @@ export function buildPlivoWebhookController(registry, orchestrator) {
       }
 
       const xml = conferenceJoinXml(conferenceRoomName(sessionId), {
-        mutedParticipants: true,
+        mutedParticipants: env.plivoConferenceMuted,
       });
       res.type('text/xml').send(xml);
 

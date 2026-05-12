@@ -89,6 +89,14 @@ export const env = {
   plivoAuthToken: req('PLIVO_AUTH_TOKEN'),
   plivoCallerId: req('PLIVO_PHONE_NUMBER'),
   plivoValidateSignatures: req('PLIVO_VALIDATE_SIGNATURES', 'false') === 'true',
+  /**
+   * Conference `muted=true` can silence RTP to Plivo’s Stream on some setups — no `media` → no translation audio.
+   * Default **false** (unmuted conference) so bidirectional streams get caller audio; set **true** to hide raw cross-talk (see README).
+   */
+  plivoConferenceMuted:
+    String(req('PLIVO_CONFERENCE_MUTED', 'false')).toLowerCase() === 'true',
+  /** Plivo Stream REST: `inbound` (default) or `both` if inbound gives silence in conference. */
+  plivoStreamAudioTrack: req('PLIVO_STREAM_AUDIO_TRACK', 'inbound'),
   customerDialDelayMs: reqNum('CUSTOMER_DIAL_DELAY_MS', 400),
   sessionIdleTtlMs: reqNum('SESSION_IDLE_TTL_MS', 2 * 60 * 60 * 1000),
   callSetupTimeoutMs: reqNum('CALL_SETUP_TIMEOUT_MS', 120000),
@@ -143,6 +151,9 @@ export function assertEnvForRuntime() {
     console.warn(`[boot] Missing env (some features offline): ${missing.join(', ')}`);
   }
 
+  console.info(
+    `[boot] PLIVO_CONFERENCE_MUTED=${env.plivoConferenceMuted} (false = conference not muted — needed for Stream mic audio on many carriers) · PLIVO_STREAM_AUDIO_TRACK=${env.plivoStreamAudioTrack}`,
+  );
   const p = env.openaiRealtimePipeline;
   if (p === 'voice') {
     console.info(

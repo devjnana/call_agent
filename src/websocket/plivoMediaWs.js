@@ -92,10 +92,31 @@ export function attachPlivoMediaWs(server, registry) {
     const sess = sessionId ? registry.get(sessionId) : null;
 
     if (!sess) {
-      log.warn('Plivo WS unknown session', sessionId);
+      log.warn('Plivo WS unknown session', sessionId, req.url?.slice(0, 160));
       ws.close(4404, 'unknown_session');
       return;
     }
+
+    log.info(
+      'Plivo WS socket open',
+      sess.id,
+      leg,
+      'from',
+      req.socket?.remoteAddress ?? '?',
+      'url',
+      (req.url || '').slice(0, 140),
+    );
+
+    ws.on('close', (code, reason) => {
+      log.info(
+        'Plivo WS socket closed (before events?)',
+        sess.id,
+        leg,
+        'code',
+        code,
+        String(reason || ''),
+      );
+    });
 
     ws.on('message', (frame) => {
       let evt;

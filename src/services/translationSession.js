@@ -284,6 +284,9 @@ export class TranslationSession {
    */
   onPlivoSocketClosed(role) {
     if (this.closed) return;
+    log.warn(
+      `Plivo media websocket closed session=${this.id} leg=${role} — ending bridge (any leg disconnect destroys session)`,
+    );
     if (role === 'agent') {
       this.agentPlivoWs = null;
       this.agentStreamId = null;
