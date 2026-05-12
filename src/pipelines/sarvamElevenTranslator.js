@@ -281,7 +281,7 @@ export class SarvamElevenTranslator {
     if (needsTranslate) {
       const trBody = {
         input: raw,
-        source_language_code: detected || sourceMapped || 'auto',
+        source_language_code: sourceMapped || detected || 'auto',
         target_language_code: targetSarvam,
         model: env.sarvamTranslateModel,
       };
@@ -306,6 +306,16 @@ export class SarvamElevenTranslator {
         throw new Error(`Sarvam translate: invalid JSON ${tlText.slice(0, 200)}`);
       }
       line = (tj.translated_text || '').trim() || raw;
+      if (
+        needsTranslate &&
+        line === raw &&
+        targetSarvam &&
+        targetSarvam !== 'en-IN'
+      ) {
+        log.warn(
+          `Sarvam+11 [${this.label}] translate returned same text as transcript — check Sarvam response, source=${trBody.source_language_code} target=${targetSarvam}`,
+        );
+      }
     }
 
     if (env.pipelineTroubleshootLog) {

@@ -1,4 +1,7 @@
-/** Build Plivo-compatible conference dial XML — both legs join muted so only streamed audio reaches each party. */
+/** Build Plivo-compatible conference dial XML.
+ * Plivo `muted=true`: that leg does **not transmit** into the conference (others don’t hear raw mic from that leg).
+ * For two-way interpreter circuits, use muted on **both** legs so only `playAudio` carries speech.
+ */
 
 /**
  * Conference room name derived from CRM session UUID.
