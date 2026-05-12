@@ -1,6 +1,10 @@
 import { decodeMuLawToPcm16 } from '../utils/mulaw.js';
-import { pcm8kTo24k, openAiPcmToPlivoMuLaw } from '../utils/audioResample.js';
-import { isLikelySpeech } from '../utils/vad.js';
+import {
+  pcm8kTo24k,
+  pcm24kTo8k,
+  openAiPcmToPlivoMuLaw,
+} from '../utils/audioResample.js';
+import { isLikelySpeech, pcm16MonoRms } from '../utils/vad.js';
 import { isoToPromptLabel } from '../utils/languageLabels.js';
 import { env } from '../config/index.js';
 import { OpenAiRealtimeTranslation } from '../openai/realtimeTranslation.js';
@@ -11,11 +15,14 @@ import { log } from '../utils/logger.js';
 /** Chunk TTS PCM for Plivo playAudio frames (~75ms at 24kHz mono s16le). */
 const PLAY_PCM24_CHUNK_BYTES = 3600;
 
+/** Plivo requires `playAudio.media` to match the Stream `content_type` (incl. rate suffix for µ-law). */
 function sendPcm24ToPlivo(ws, pcm24kDelta, troubleshootCtx) {
   const troubleshoot =
     env.openaiRealtimePipeline === 'sarvam_eleven' && env.pipelineTroubleshootLog;
   const sid = troubleshootCtx?.sessionId;
   const listener = troubleshootCtx?.listenerLeg;
+  const streamId = troubleshootCtx?.streamId;
+  const useMulaw = troubleshootCtx?.useMulaw ?? env.plivoStreamUsesMulaw;
   if (!ws || ws.readyState !== 1 || !pcm24kDelta?.length) {
     if (troubleshoot && pcm24kDelta?.length) {
       log.warn(
@@ -30,22 +37,26 @@ function sendPcm24ToPlivo(ws, pcm24kDelta, troubleshootCtx) {
       i,
       Math.min(i + PLAY_PCM24_CHUNK_BYTES, pcm24kDelta.length),
     );
-    const mu = openAiPcmToPlivoMuLaw(slice).toString('base64');
-    ws.send(
-      JSON.stringify({
-        event: 'playAudio',
-        media: {
-          contentType: 'audio/x-mulaw',
+    const bytes8k = useMulaw ? openAiPcmToPlivoMuLaw(slice) : pcm24kTo8k(slice);
+    const media = useMulaw
+      ? {
+          contentType: 'audio/x-mulaw;rate=8000',
           sampleRate: 8000,
-          payload: mu,
-        },
-      }),
-    );
+          payload: bytes8k.toString('base64'),
+        }
+      : {
+          contentType: 'audio/x-l16',
+          sampleRate: 8000,
+          payload: bytes8k.toString('base64'),
+        };
+    const out = { event: 'playAudio', media };
+    if (streamId) out.streamId = streamId;
+    ws.send(JSON.stringify(out));
     frames += 1;
   }
   if (troubleshoot) {
     log.info(
-      `[engine] playAudio ok session=${sid} listener=${listener} pcm24_bytes=${pcm24kDelta.length} mulaw_chunks=${frames}`,
+      `[engine] playAudio ok session=${sid} listener=${listener} codec=${useMulaw ? 'mulaw' : 'l16'} streamId=${streamId ? 'yes' : 'no'} pcm24_bytes=${pcm24kDelta.length} chunks=${frames}`,
     );
   }
 }
@@ -103,6 +114,20 @@ export class TranslationSession {
     this._openAiWarmed = false;
     /** @type {Set<string>} */
     this._trFirstMediaLog = new Set();
+    /**
+     * Plivo inbound framing per leg (from Stream `start.mediaFormat` or env default).
+     * @type {{ agent: 'mulaw' | 'l16', customer: 'mulaw' | 'l16' }}
+     */
+    this.inboundCodec = {
+      agent: env.plivoStreamUsesMulaw ? 'mulaw' : 'l16',
+      customer: env.plivoStreamUsesMulaw ? 'mulaw' : 'l16',
+    };
+    /** TTS PCM queued until `streamId` from Plivo `start` */
+    this._pendingTtsAgent = [];
+    this._pendingTtsCustomer = [];
+    /** @type {boolean} */
+    this._playDeferredLoggedAgent = false;
+    this._playDeferredLoggedCustomer = false;
   }
 
   idleMs() {
@@ -220,15 +245,66 @@ export class TranslationSession {
       }
       if (streamId) this.customerStreamId = streamId;
     }
+    if (streamId) this.flushPendingTts(role);
+  }
+
+  /**
+   * Plivo `start` — set inbound codec + stream id (playAudio must target this `streamId`).
+   * @param {"agent"|"customer"} leg
+   * @param {object} start
+   * @param {import('ws').WebSocket} ws
+   */
+  onPlivoStreamStart(leg, start, ws) {
+    const enc = String(start?.mediaFormat?.encoding || '').toLowerCase();
+    if (enc.includes('mulaw')) this.inboundCodec[leg] = 'mulaw';
+    else if (enc) this.inboundCodec[leg] = 'l16';
+
+    this.attachPlivoSocket(leg, ws, {
+      streamId: start?.streamId || null,
+    });
+  }
+
+  /**
+   * @param {"agent"|"customer"} role
+   */
+  flushPendingTts(role) {
+    const useMulaw = env.plivoStreamUsesMulaw;
+    if (role === 'agent') {
+      while (this.agentStreamId && this._pendingTtsAgent.length > 0) {
+        const b = this._pendingTtsAgent.shift();
+        sendPcm24ToPlivo(this.agentPlivoWs, b, {
+          sessionId: this.id,
+          listenerLeg: 'agent',
+          streamId: this.agentStreamId,
+          useMulaw,
+        });
+      }
+    } else {
+      while (this.customerStreamId && this._pendingTtsCustomer.length > 0) {
+        const b = this._pendingTtsCustomer.shift();
+        sendPcm24ToPlivo(this.customerPlivoWs, b, {
+          sessionId: this.id,
+          listenerLeg: 'customer',
+          streamId: this.customerStreamId,
+          useMulaw,
+        });
+      }
+    }
   }
 
   /** @param {"agent"|"customer"} spokeRole RTP source mic */
-  ingestPlivoMedia(spokeRole, mulawPayload) {
+  ingestPlivoMedia(spokeRole, rawPayload) {
     if (this.closed) return;
     if (!this._openAiWarmed) this.warmTranslators();
     this.touch();
 
-    if (mulawPayload.length === 0) return;
+    if (rawPayload.length === 0) return;
+
+    const codec = this.inboundCodec[spokeRole];
+    const speech =
+      codec === 'mulaw'
+        ? isLikelySpeech(rawPayload)
+        : pcm16MonoRms(rawPayload) > 480;
 
     if (
       env.openaiRealtimePipeline === 'sarvam_eleven' &&
@@ -236,19 +312,24 @@ export class TranslationSession {
       !this._trFirstMediaLog.has(spokeRole)
     ) {
       this._trFirstMediaLog.add(spokeRole);
+      const extra =
+        codec === 'mulaw'
+          ? `mulaw_bytes=${rawPayload.length} likely_speech_mulaw=${isLikelySpeech(rawPayload)}`
+          : `pcm16_bytes=${rawPayload.length} likely_speech_l16_rms=${pcm16MonoRms(rawPayload).toFixed(0)}`;
       log.info(
-        `[engine] Plivo media first packet session=${this.id} speaker_leg=${spokeRole} mulaw_bytes=${mulawPayload.length} likely_speech_energy=${isLikelySpeech(mulawPayload)}`,
+        `[engine] Plivo media first packet session=${this.id} speaker_leg=${spokeRole} codec=${codec} ${extra}`,
       );
     }
 
-    if (spokeRole === 'agent' && this.agentStreamId && isLikelySpeech(mulawPayload)) {
+    if (spokeRole === 'agent' && this.agentStreamId && speech) {
       this.clearPlivoPlaybackForListener('customer', this.customerStreamId);
     }
-    if (spokeRole === 'customer' && this.customerStreamId && isLikelySpeech(mulawPayload)) {
+    if (spokeRole === 'customer' && this.customerStreamId && speech) {
       this.clearPlivoPlaybackForListener('agent', this.agentStreamId);
     }
 
-    const pcm16 = decodeMuLawToPcm16(mulawPayload);
+    const pcm16 =
+      codec === 'mulaw' ? decodeMuLawToPcm16(rawPayload) : rawPayload;
     const pcm24 = pcm8kTo24k(pcm16);
 
     if (spokeRole === 'customer') {
@@ -262,16 +343,50 @@ export class TranslationSession {
    * @param {Buffer} pcm24kDelta mono int16 LE (OpenAI deltas)
    */
   playMuLawOnAgentLeg(pcm24kDelta) {
+    const useMulaw = env.plivoStreamUsesMulaw;
+    if (!this.agentStreamId) {
+      if (pcm24kDelta?.length) this._pendingTtsAgent.push(pcm24kDelta);
+      if (
+        env.pipelineTroubleshootLog &&
+        pcm24kDelta?.length &&
+        !this._playDeferredLoggedAgent
+      ) {
+        this._playDeferredLoggedAgent = true;
+        log.warn(
+          `[engine] playAudio queued until streamId session=${this.id} listener=agent pcm24_bytes=${pcm24kDelta.length}`,
+        );
+      }
+      return;
+    }
     sendPcm24ToPlivo(this.agentPlivoWs, pcm24kDelta, {
       sessionId: this.id,
       listenerLeg: 'agent',
+      streamId: this.agentStreamId,
+      useMulaw,
     });
   }
 
   playMuLawOnCustomerLeg(pcm24kDelta) {
+    const useMulaw = env.plivoStreamUsesMulaw;
+    if (!this.customerStreamId) {
+      if (pcm24kDelta?.length) this._pendingTtsCustomer.push(pcm24kDelta);
+      if (
+        env.pipelineTroubleshootLog &&
+        pcm24kDelta?.length &&
+        !this._playDeferredLoggedCustomer
+      ) {
+        this._playDeferredLoggedCustomer = true;
+        log.warn(
+          `[engine] playAudio queued until streamId session=${this.id} listener=customer pcm24_bytes=${pcm24kDelta.length}`,
+        );
+      }
+      return;
+    }
     sendPcm24ToPlivo(this.customerPlivoWs, pcm24kDelta, {
       sessionId: this.id,
       listenerLeg: 'customer',
+      streamId: this.customerStreamId,
+      useMulaw,
     });
   }
 

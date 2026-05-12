@@ -51,17 +51,23 @@ export async function originateCall(body) {
 }
 
 /**
- * Attach bidirectional 8 kHz µ-law WS stream to answered call UUID.
+ * Attach bidirectional audio Stream (WebSocket) to answered call UUID.
+ * With bidirectional streams, Plivo only allows `audio_track=inbound` (not `both` or `outbound`).
  */
 export async function startBidirectionalMuLawStream(callUuid, serviceUrl) {
   const url = `${plivoBaseUrl()}/${callUuid}/Stream/`;
-  const track = String(env.plivoStreamAudioTrack || 'inbound').toLowerCase();
-  const audioTrack = track === 'both' ? 'both' : 'inbound';
+  const requested = String(env.plivoStreamAudioTrack || 'inbound').toLowerCase();
+  if (requested !== 'inbound') {
+    log.warn(
+      `[plivo] PLIVO_STREAM_AUDIO_TRACK=${requested} ignored — bidirectional Stream API requires inbound`,
+    );
+  }
+  const audioTrack = 'inbound';
   const body = {
     service_url: serviceUrl,
     bidirectional: true,
     audio_track: audioTrack,
-    content_type: 'audio/x-mulaw;rate=8000',
+    content_type: env.plivoStreamContentType,
   };
   const resp = await fetch(url, {
     method: 'POST',
@@ -86,6 +92,8 @@ export async function startBidirectionalMuLawStream(callUuid, serviceUrl) {
       audioTrack,
       'stream_id=',
       j.stream_id ?? j.stream_uuid ?? '?',
+      'content_type=',
+      env.plivoStreamContentType,
       'service_url=',
       String(serviceUrl).slice(0, 72) + (String(serviceUrl).length > 72 ? '…' : ''),
     );

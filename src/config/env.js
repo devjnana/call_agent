@@ -61,6 +61,9 @@ function buildOpenAiVoiceModelChain() {
 
 const _voiceChain = buildOpenAiVoiceModelChain();
 
+/** Plivo Stream `content_type` + derived flag (must match `playAudio` codec). */
+const _plivoStreamCt = req('PLIVO_STREAM_CONTENT_TYPE', 'audio/x-l16;rate=8000');
+
 export const env = {
   port: reqNum('PORT', 3000),
   /** HTTPS base for Plivo answer/hangup webhooks */
@@ -98,6 +101,13 @@ export const env = {
     String(req('PLIVO_CONFERENCE_MUTED', 'false')).toLowerCase() === 'true',
   /** Plivo Stream REST: `inbound` (default) or `both` if inbound gives silence in conference. */
   plivoStreamAudioTrack: req('PLIVO_STREAM_AUDIO_TRACK', 'inbound'),
+  /**
+   * Must match `playAudio` encoding. Plivo defaults to linear PCM; µ-law works if set explicitly.
+   * @see https://www.plivo.com/docs/voice/api/audio-stream/initiate-an-audio-stream/
+   */
+  plivoStreamContentType: _plivoStreamCt,
+  /** True when stream uses G.711 µ-law (otherwise 8 kHz s16le linear PCM). */
+  plivoStreamUsesMulaw: String(_plivoStreamCt).toLowerCase().includes('mulaw'),
   customerDialDelayMs: reqNum('CUSTOMER_DIAL_DELAY_MS', 400),
   sessionIdleTtlMs: reqNum('SESSION_IDLE_TTL_MS', 2 * 60 * 60 * 1000),
   callSetupTimeoutMs: reqNum('CALL_SETUP_TIMEOUT_MS', 120000),
@@ -153,7 +163,7 @@ export function assertEnvForRuntime() {
   }
 
   console.info(
-    `[boot] PLIVO_CONFERENCE_MUTED=${env.plivoConferenceMuted} · PLIVO_STREAM_AUDIO_TRACK=${env.plivoStreamAudioTrack} (agent/customer use separate conference rooms — no raw cross-talk)`,
+    `[boot] PLIVO_CONFERENCE_MUTED=${env.plivoConferenceMuted} · stream=${env.plivoStreamContentType}${env.plivoStreamUsesMulaw ? ' (µ-law)' : ' (L16)'} · PLIVO_STREAM_AUDIO_TRACK=${env.plivoStreamAudioTrack} (bidirectional API uses inbound only)`,
   );
   const p = env.openaiRealtimePipeline;
   if (p === 'voice') {

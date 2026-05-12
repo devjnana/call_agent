@@ -129,18 +129,19 @@ export function attachPlivoMediaWs(server, registry) {
         return;
       }
 
-      switch (evt.event) {
+      const ev = String(evt.event || '').toLowerCase();
+      switch (ev) {
         case 'start':
-          sess.attachPlivoSocket(leg, ws, {
-            streamId:
-              evt.start?.streamId || evt.mediaStreamId || evt.streamId || null,
-          });
+          sess.onPlivoStreamStart(leg, evt.start || evt.Start || {}, ws);
           log.info('Plivo stream start', sess.id, leg);
           break;
 
         case 'media': {
           if (!evt.media?.payload) return;
-          sess.ingestPlivoMedia(leg, Buffer.from(evt.media.payload, 'base64'));
+          sess.ingestPlivoMedia(
+            leg,
+            Buffer.from(evt.media.payload, 'base64'),
+          );
           break;
         }
 
