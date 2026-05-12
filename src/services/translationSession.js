@@ -5,10 +5,11 @@ import { isoToPromptLabel } from '../utils/languageLabels.js';
 import { env } from '../config/index.js';
 import { OpenAiRealtimeTranslation } from '../openai/realtimeTranslation.js';
 import { OpenAiRealtimeVoiceInterpreter } from '../openai/realtimeVoiceInterpreter.js';
+import { SarvamElevenTranslator } from '../pipelines/sarvamElevenTranslator.js';
 import { log } from '../utils/logger.js';
 
 /**
- * Bridges two muted conference legs with independent OpenAI Realtime translators.
+ * Bridges two muted conference legs with independent realtime translators (OpenAI or Sarvam+ElevenLabs).
  */
 export class TranslationSession {
   /**
@@ -46,9 +47,9 @@ export class TranslationSession {
     /** @type {string | null} */
     this.customerStreamId = null;
 
-    /** @type {OpenAiRealtimeTranslation | OpenAiRealtimeVoiceInterpreter | null} */
+    /** @type {OpenAiRealtimeTranslation | OpenAiRealtimeVoiceInterpreter | SarvamElevenTranslator | null} */
     this.oaiTowardAgent = null;
-    /** @type {OpenAiRealtimeTranslation | OpenAiRealtimeVoiceInterpreter | null} */
+    /** @type {OpenAiRealtimeTranslation | OpenAiRealtimeVoiceInterpreter | SarvamElevenTranslator | null} */
     this.oaiTowardCustomer = null;
 
     this.customerDialStarted = false;
@@ -78,17 +79,36 @@ export class TranslationSession {
     this._openAiWarmed = true;
 
     const pipeline = env.openaiRealtimePipeline;
-    /** @typedef {typeof OpenAiRealtimeTranslation | typeof OpenAiRealtimeVoiceInterpreter} OaiCtor */
+    /** @typedef {typeof OpenAiRealtimeTranslation | typeof OpenAiRealtimeVoiceInterpreter | typeof SarvamElevenTranslator} PipeCtor */
 
-    /** @type {OaiCtor} */
+    /** @type {PipeCtor} */
     let TowAgent;
-    /** @type {OaiCtor} */
+    /** @type {PipeCtor} */
     let TowCustomer;
 
     let argsTowAgent;
     let argsTowCust;
 
-    if (pipeline === 'voice') {
+    if (pipeline === 'sarvam_eleven') {
+      TowAgent = SarvamElevenTranslator;
+      TowCustomer = SarvamElevenTranslator;
+      argsTowAgent = {
+        sourceIso639: this.customerSpokenApprox,
+        targetIso639: this.toAgentTag,
+        elevenLabsVoiceId: env.elevenLabsVoiceIdForIso(this.toAgentTag),
+        onDeltaPcm: (pcm24delta) => this.playMuLawOnAgentLeg(pcm24delta),
+        onError: (e) => log.warn('Sarvam+11 cust→agent', this.id, e.message),
+        label: 'cust→agent',
+      };
+      argsTowCust = {
+        sourceIso639: this.agentSpokenApprox,
+        targetIso639: this.toCustomerTag,
+        elevenLabsVoiceId: env.elevenLabsVoiceIdForIso(this.toCustomerTag),
+        onDeltaPcm: (pcm24delta) => this.playMuLawOnCustomerLeg(pcm24delta),
+        onError: (e) => log.warn('Sarvam+11 agent→cust', this.id, e.message),
+        label: 'agent→cust',
+      };
+    } else if (pipeline === 'voice') {
       TowAgent = OpenAiRealtimeVoiceInterpreter;
       TowCustomer = OpenAiRealtimeVoiceInterpreter;
       argsTowAgent = {

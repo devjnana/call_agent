@@ -36,3 +36,45 @@ export function openAiPcmToPlivoMuLaw(openAiDeltaBuffer) {
   const pcm8 = pcm24kTo8k(openAiDeltaBuffer);
   return pcm16LeToMuLaw(pcm8);
 }
+
+/**
+ * 24 kHz → 16 kHz (Sarvam STT expects 16 kHz PCM / WAV).
+ */
+export function pcm24kTo16k(pcm24k) {
+  const nIn = pcm24k.length >>> 1;
+  const outN = Math.floor((nIn * 16000) / 24000);
+  if (outN <= 0) return Buffer.alloc(0);
+  const out = Buffer.allocUnsafe(outN * 2);
+  for (let j = 0; j < outN; j++) {
+    const srcPos = (j * 24000) / 16000;
+    const i0 = Math.floor(srcPos);
+    const i1 = Math.min(i0 + 1, nIn - 1);
+    const frac = srcPos - i0;
+    const s0 = pcm24k.readInt16LE(i0 * 2);
+    const s1 = pcm24k.readInt16LE(i1 * 2);
+    const s = Math.round(s0 + (s1 - s0) * frac);
+    out.writeInt16LE(s, j * 2);
+  }
+  return out;
+}
+
+/** Wrap mono s16le PCM in a minimal WAV (for multipart STT uploads). */
+export function pcm16leMonoToWav(pcm, sampleRate) {
+  const dataLen = pcm.length;
+  const buf = Buffer.alloc(44 + dataLen);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + dataLen, 4);
+  buf.write('WAVE', 8);
+  buf.write('fmt ', 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate * 2, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write('data', 36);
+  buf.writeUInt32LE(dataLen, 40);
+  pcm.copy(buf, 44);
+  return buf;
+}

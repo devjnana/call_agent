@@ -21,6 +21,7 @@ function normalizeBaseUrl(url) {
 function normalizePipeline(v) {
   const k = String(v || '').trim().toLowerCase();
   if (k === 'voice' || k === 'interpreter') return 'voice';
+  if (k === 'sarvam_eleven' || k === 'sarvam' || k === 'sarvam+eleven') return 'sarvam_eleven';
   return 'translation';
 }
 
@@ -70,6 +71,7 @@ export const env = {
   /**
    * `translation`: `/v1/realtime/translations` + `gpt-realtime-translate` (needs paid tier · not FREE).
    * `voice`: `/v1/realtime` + model chain (interpreter persona · turn-based VAD).
+   * `sarvam_eleven`: Sarvam STT + Sarvam text translate + ElevenLabs streaming TTS (no OpenAI).
    */
   openaiRealtimePipeline: normalizePipeline(req('OPENAI_REALTIME_PIPELINE')),
   openaiTranslationModel: req(
@@ -90,11 +92,36 @@ export const env = {
   customerDialDelayMs: reqNum('CUSTOMER_DIAL_DELAY_MS', 400),
   sessionIdleTtlMs: reqNum('SESSION_IDLE_TTL_MS', 2 * 60 * 60 * 1000),
   callSetupTimeoutMs: reqNum('CALL_SETUP_TIMEOUT_MS', 120000),
+
+  /** Sarvam + ElevenLabs phone pipeline */
+  sarvamApiKey: req('SARVAM_API_KEY'),
+  sarvamSttModel: req('SARVAM_STT_MODEL', 'saarika:v2.5'),
+  sarvamTranslateModel: req('SARVAM_TRANSLATE_MODEL', 'mayura:v1'),
+  elevenlabsApiKey: req('ELEVENLABS_API_KEY'),
+  elevenlabsTtsModel: req('ELEVENLABS_TTS_MODEL', 'eleven_flash_v2_5'),
+  /** Utterance chunking for REST STT (RMS silence gate, Plivo 8 kHz upsampled to 24 kHz). */
+  pipelineUtteranceSilenceMs: reqNum('PIPELINE_UTTERANCE_SILENCE_MS', 480),
+  pipelineMinUtteranceMs: reqNum('PIPELINE_MIN_UTTERANCE_MS', 180),
+  pipelineMaxUtteranceMs: reqNum('PIPELINE_MAX_UTTERANCE_MS', 15000),
+  pipelineUtteranceRmsThreshold: reqNum('PIPELINE_UTTERANCE_RMS', 380),
+
+  /**
+   * Per-listener voice: `ELEVENLABS_VOICE_EN`, `ELEVENLABS_VOICE_HI`, … else `ELEVENLABS_VOICE_ID`.
+   * @param {string} [iso639]
+   */
+  elevenLabsVoiceIdForIso(iso639) {
+    const k = String(iso639 || '').toLowerCase().slice(0, 2);
+    const fromEnv = process.env[`ELEVENLABS_VOICE_${k.toUpperCase()}`];
+    if (fromEnv !== undefined && String(fromEnv).trim() !== '') return String(fromEnv).trim();
+    return req('ELEVENLABS_VOICE_ID', '');
+  },
 };
 
 export function assertEnvForRuntime() {
   const missing = [];
-  if (!env.openaiApiKey) missing.push('OPENAI_API_KEY');
+  if (env.openaiRealtimePipeline !== 'sarvam_eleven' && !env.openaiApiKey) {
+    missing.push('OPENAI_API_KEY');
+  }
   if (!env.plivoAuthId) missing.push('PLIVO_AUTH_ID');
   if (!env.plivoAuthToken) missing.push('PLIVO_AUTH_TOKEN');
   if (!env.plivoCallerId) missing.push('PLIVO_PHONE_NUMBER');
@@ -109,6 +136,12 @@ export function assertEnvForRuntime() {
     console.info(
       `[boot] OPENAI_REALTIME_PIPELINE=voice • models (try until one accepts): ${env.openaiVoiceModelChain.join(' → ')} · VAD=${env.openaiVoiceVadKind}`,
     );
+  } else if (p === 'sarvam_eleven') {
+    console.info(
+      `[boot] OPENAI_REALTIME_PIPELINE=sarvam_eleven • Sarvam STT (${env.sarvamSttModel}) + translate (${env.sarvamTranslateModel}) + ElevenLabs (${env.elevenlabsTtsModel})`,
+    );
+    if (!env.sarvamApiKey) console.warn('[boot] SARVAM_API_KEY missing — pipeline will error until set');
+    if (!env.elevenlabsApiKey) console.warn('[boot] ELEVENLABS_API_KEY missing — pipeline will error until set');
   } else {
     console.info(
       `[boot] OPENAI_REALTIME_PIPELINE=translation • model=${env.openaiTranslationModel} (/v1/realtime/translations — requires billed access; GPT Realtime Translate is unavailable on FREE tier per OpenAI docs)`,
