@@ -110,7 +110,7 @@ export class OpenAiRealtimeVoiceInterpreter {
       headers['OpenAI-Safety-Identifier'] = env.openaiSafetyIdentifier;
     }
 
-    log.info(`[engine] Voice interpreter WebSocket → model=${modelName}`);
+    log.info(`Voice interpreter WebSocket → model=${modelName}`);
 
     this.ws = new WebSocket(uri, { headers });
 
@@ -137,7 +137,7 @@ export class OpenAiRealtimeVoiceInterpreter {
               turn_detection: vadBlock(),
             },
             output: {
-              format: { type: 'audio/pcm' },
+              format: { type: 'audio/pcm', rate: 24000 },
               voice: 'alloy',
             },
           },
@@ -166,7 +166,7 @@ export class OpenAiRealtimeVoiceInterpreter {
             if (isModelAccessDenied(errMsg) && this.chain && this.chainIndex < this.chain.length - 1) {
               this.chainIndex += 1;
               log.warn(
-                `[engine] Model rejected (${errMsg.slice(0, 120)}…); retrying with ${this.chain[this.chainIndex]}`,
+                `Model rejected (${errMsg.slice(0, 120)}…); retrying with ${this.chain[this.chainIndex]}`,
               );
               setImmediate(() => this.attemptConnect());
               return;
