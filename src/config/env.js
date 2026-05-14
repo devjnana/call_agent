@@ -61,6 +61,8 @@ function buildOpenAiVoiceModelChain() {
 
 const _voiceChain = buildOpenAiVoiceModelChain();
 
+const _pipelineUtteranceRms = reqNum('PIPELINE_UTTERANCE_RMS', 95);
+
 /** Plivo Stream `content_type` + derived flag (must match `playAudio` codec). */
 const _plivoStreamCt = req('PLIVO_STREAM_CONTENT_TYPE', 'audio/x-l16;rate=8000');
 
@@ -123,7 +125,23 @@ export const env = {
   pipelineMinUtteranceMs: reqNum('PIPELINE_MIN_UTTERANCE_MS', 100),
   pipelineMaxUtteranceMs: reqNum('PIPELINE_MAX_UTTERANCE_MS', 15000),
   /** Int16 PCM RMS — telco audio is often quiet; 380 was too high and blocked all flushes. */
-  pipelineUtteranceRmsThreshold: reqNum('PIPELINE_UTTERANCE_RMS', 95),
+  pipelineUtteranceRmsThreshold: _pipelineUtteranceRms,
+  /**
+   * L16 ingress: RMS per Plivo chunk to treat as “speech” for barge-in `clearAudio`. Must align with PIPELINE_UTTERANCE_RMS
+   * (formerly a hard-coded 480, which blocked real speech and behaved inconsistently vs Sarvam’s ~95 RMS scale).
+   * Set PIPELINE_BARGE_IN_L16_RMS to override.
+   */
+  pipelineBargeInL16MinRms: req('PIPELINE_BARGE_IN_L16_RMS')
+    ? reqNum('PIPELINE_BARGE_IN_L16_RMS', _pipelineUtteranceRms)
+    : _pipelineUtteranceRms,
+  /**
+   * Minimum ms between outbound `clearAudio` to the same Plivo listener (limits echo-driven clear storms).
+   */
+  pipelineClearAudioDebounceMs: reqNum('PIPELINE_CLEAR_AUDIO_DEBOUNCE_MS', 280),
+  /**
+   * When set (e.g. Saasgold), English STT lines get `Sanskrit`/`Sanscrit` → this string before Sarvam translate.
+   */
+  pipelinePrimaryBrand: String(req('PIPELINE_PRIMARY_BRAND', '') || '').trim(),
   /**
    * If RMS never crosses the threshold (very soft speech), still flush after this many ms of audio
    * in the buffer so Sarvam STT still runs.
@@ -149,16 +167,19 @@ export const env = {
   /** OpenAI voice (`server_vad`): ms of silence before end-of-speech. Higher reduces spurious turns on a quiet line. */
   openaiVoiceServerVadSilenceMs: reqNum('OPENAI_VOICE_SERVER_VAD_SILENCE_MS', 520),
 
-  /** Sarvam+11 milestones: flush, STT/TTS/playAudio skips. Default true; set PIPELINE_TROUBLESHOOT_LOG=false to mute. */
+  /** Rare deep debug: flush RMS, ElevenLabs, Plivo quirks. Usually keep false. */
   pipelineTroubleshootLog:
-    String(req('PIPELINE_TROUBLESHOOT_LOG', 'true')).toLowerCase() === 'true',
-  /** Frequent RMS / buffer dumps (PIPELINE_VERBOSE_LOG=true). */
+    String(req('PIPELINE_TROUBLESHOOT_LOG', 'false')).toLowerCase() === 'true',
+  /** Frequent per-chunk RMS (very noisy). */
   pipelineVerboseLog: String(req('PIPELINE_VERBOSE_LOG', 'false')).toLowerCase() === 'true',
-  /**
-   * Sarvam+11: log each utterance STT transcript → final string sent to ElevenLabs (`[engine] TRANSLATE:…`).
-   */
+  /** Verbose TRANSLATION line with TTS snippet (mostly superseded by pipelineVoiceTextLog). */
   pipelineTranslationConsoleLog:
-    String(req('PIPELINE_TRANSLATION_CONSOLE_LOG', 'true')).toLowerCase() === 'true',
+    String(req('PIPELINE_TRANSLATION_CONSOLE_LOG', 'false')).toLowerCase() === 'true',
+  /**
+   * Sarvam+11: one line per recognized utterance: `[voice→text] agent→customer │ "…"`.
+   */
+  pipelineVoiceTextLog:
+    String(req('PIPELINE_VOICE_TEXT_LOG', 'true')).toLowerCase() === 'true',
 
   /**
    * Per-listener voice: `ELEVENLABS_VOICE_EN`, `ELEVENLABS_VOICE_HI`, … else `ELEVENLABS_VOICE_ID`.
@@ -186,45 +207,23 @@ export function assertEnvForRuntime() {
     console.warn(`[boot] Missing env (some features offline): ${missing.join(', ')}`);
   }
 
-  console.info(
-    `[boot] PLIVO_CONFERENCE_MUTED=${env.plivoConferenceMuted} · stream=${env.plivoStreamContentType}${env.plivoStreamUsesMulaw ? ' (µ-law)' : ' (L16)'} · PLIVO_STREAM_AUDIO_TRACK=${env.plivoStreamAudioTrack} (bidirectional API uses inbound only)`,
-  );
   const p = env.openaiRealtimePipeline;
-  if (p === 'voice') {
-    console.info(
-      `[boot] OPENAI_REALTIME_PIPELINE=voice • models (try until one accepts): ${env.openaiVoiceModelChain.join(' → ')} · VAD=${env.openaiVoiceVadKind}` +
-        (String(env.openaiVoiceVadKind).toLowerCase() === 'semantic_vad'
-          ? ''
-          : ` • OPENAI_VOICE_SERVER_VAD_SILENCE_MS=${env.openaiVoiceServerVadSilenceMs}`),
-    );
-  } else if (p === 'sarvam_eleven') {
-    console.info(
-      `[boot] OPENAI_REALTIME_PIPELINE=sarvam_eleven • Sarvam STT (${env.sarvamSttModel}) + translate (${env.sarvamTranslateModel}) + ElevenLabs (${env.elevenlabsTtsModel})`,
-    );
-    if (!env.sarvamApiKey) console.warn('[boot] SARVAM_API_KEY missing — pipeline will error until set');
-    if (!env.elevenlabsApiKey) console.warn('[boot] ELEVENLABS_API_KEY missing — pipeline will error until set');
+  const pcm = env.plivoStreamUsesMulaw ? 'mulaw' : 'l16';
+  console.info(
+    `[boot] voice-agent PORT=${env.port} pipeline=${p} stream_pcm=${pcm} voice_text_log=${env.pipelineVoiceTextLog}`,
+  );
+  if (!env.sarvamApiKey && p === 'sarvam_eleven') {
+    console.warn('[boot] SARVAM_API_KEY missing');
+  }
+  if (!env.elevenlabsApiKey && p === 'sarvam_eleven') {
+    console.warn('[boot] ELEVENLABS_API_KEY missing');
+  }
+  if (p === 'sarvam_eleven') {
     const vid = String(process.env.ELEVENLABS_VOICE_ID || '').trim();
     const ven = String(process.env.ELEVENLABS_VOICE_EN || '').trim();
     const vhi = String(process.env.ELEVENLABS_VOICE_HI || '').trim();
     if (!vid && (!ven || !vhi)) {
-      console.warn(
-        '[boot] ElevenLabs: set ELEVENLABS_VOICE_ID (single voice for every leg) **or** both ELEVENLABS_VOICE_EN and ELEVENLABS_VOICE_HI for Hindi↔English. Missing EN voice → agent hears nothing (cust→agent).',
-      );
+      console.warn('[boot] Set ELEVENLABS_VOICE_ID or both _EN / _HI for bilingual output');
     }
-    if (env.pipelineTroubleshootLog) {
-      console.info('[boot] PIPELINE_TROUBLESHOOT_LOG=true — Sarvam+11 will log flush/STT/TTS/playAudio details');
-    }
-    if (env.pipelineVerboseLog) {
-      console.info('[boot] PIPELINE_VERBOSE_LOG=true — extra per-chunk RMS logs');
-    }
-    if (env.pipelineTranslationConsoleLog) {
-      console.info(
-        '[boot] PIPELINE_TRANSLATION_CONSOLE_LOG=true — each utterance logs STT transcript → text sent to TTS',
-      );
-    }
-  } else {
-    console.info(
-      `[boot] OPENAI_REALTIME_PIPELINE=translation • model=${env.openaiTranslationModel} (/v1/realtime/translations — requires billed access; GPT Realtime Translate is unavailable on FREE tier per OpenAI docs)`,
-    );
   }
 }

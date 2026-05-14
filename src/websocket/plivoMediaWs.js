@@ -28,6 +28,21 @@ export function canonicalServiceUrl(req) {
   return `${u.protocol}//${u.host}${pathAndQuery}`;
 }
 
+/** Plivo JSON may use `event` or `Event`; normalize so `clearedAudio` etc. match consistently. */
+function plivoInboundEventKind(evt) {
+  const raw = evt?.event ?? evt?.Event ?? '';
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+}
+
+/** Server ack after our outbound `clearAudio` — ignore for diagnostics. */
+function isPlivoClearedAudioEvent(evt) {
+  const raw = String(evt?.event ?? evt?.Event ?? '').trim();
+  return /^cleared[\s_-]*audio$/i.test(raw);
+}
+
 export function verifyPlivoWsHandshake(req) {
   if (!env.plivoValidateSignatures) return true;
 
@@ -73,13 +88,6 @@ export function attachPlivoMediaWs(server, registry) {
       return;
     }
 
-    const fwd = request.headers['x-forwarded-for'];
-    const clientIp =
-      (typeof fwd === 'string' && fwd.split(',')[0]?.trim()) ||
-      request.socket?.remoteAddress ||
-      '?';
-    log.info('[plivo-ws] upgrade /ws/plivo from', clientIp);
-
     if (!verifyPlivoWsHandshake(request)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
@@ -104,29 +112,10 @@ export function attachPlivoMediaWs(server, registry) {
       return;
     }
 
-    log.info(
-      'Plivo WS socket open',
-      sess.id,
-      leg,
-      'from',
-      req.socket?.remoteAddress ?? '?',
-      'url',
-      (req.url || '').slice(0, 140),
-    );
-
     /** Bind socket before Plivo may send audio — avoids playAudio to a null leg if `media` precedes `start`. */
     sess.attachPlivoSocket(leg, ws, {});
 
-    ws.on('close', (code, reason) => {
-      log.info(
-        'Plivo WS socket closed (before events?)',
-        sess.id,
-        leg,
-        'code',
-        code,
-        String(reason || ''),
-      );
-    });
+    ws.on('close', () => {});
 
     ws.on('message', (frame) => {
       let evt;
@@ -136,11 +125,10 @@ export function attachPlivoMediaWs(server, registry) {
         return;
       }
 
-      const ev = String(evt.event || '').toLowerCase();
+      const ev = plivoInboundEventKind(evt);
       switch (ev) {
         case 'start':
           sess.onPlivoStreamStart(leg, evt.start || evt.Start || {}, ws);
-          log.info('Plivo stream start', sess.id, leg);
           break;
 
         case 'media': {
@@ -165,14 +153,23 @@ export function attachPlivoMediaWs(server, registry) {
         }
 
         case 'stop':
-          log.info('Plivo stream stop', sess.id, leg);
           break;
 
-        default:
-          if (env.pipelineTroubleshootLog && evt.event) {
-            log.warn('Plivo WS unhandled event', sess.id, leg, evt.event, Object.keys(evt));
+        /** Acknowledgement for client-originated `{ event: 'clearAudio' }`; not speech. */
+        case 'clearedaudio':
+          break;
+
+        default: {
+          const label = evt.event ?? evt.Event ?? '';
+          const warnUnknown =
+            env.pipelineTroubleshootLog &&
+            label &&
+            !isPlivoClearedAudioEvent(evt);
+          if (warnUnknown) {
+            log.warn('Plivo WS unhandled event', sess.id, leg, label, Object.keys(evt));
           }
           break;
+        }
       }
     });
   });

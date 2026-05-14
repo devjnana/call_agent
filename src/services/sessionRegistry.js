@@ -40,7 +40,6 @@ export class SessionRegistry {
   sweep() {
     for (const s of [...this.map.values()]) {
       if (typeof s.idleMs === 'function' && s.idleMs() > env.sessionIdleTtlMs) {
-        log.warn('Evict idle session', s.id);
         s.destroy?.('idle_timeout');
       }
     }

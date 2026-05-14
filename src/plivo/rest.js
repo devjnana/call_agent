@@ -84,26 +84,8 @@ export async function startBidirectionalMuLawStream(callUuid, serviceUrl) {
   }
   try {
     const j = JSON.parse(text);
-    log.info(
-      'Plivo Stream/ OK',
-      'call',
-      String(callUuid).slice(0, 8) + '…',
-      'audio_track=',
-      audioTrack,
-      'stream_id=',
-      j.stream_id ?? j.stream_uuid ?? '?',
-      'content_type=',
-      env.plivoStreamContentType,
-      'service_url=',
-      String(serviceUrl).slice(0, 72) + (String(serviceUrl).length > 72 ? '…' : ''),
-    );
     return j;
   } catch {
-    log.info(
-      'Plivo Stream/ OK (non-JSON)',
-      String(callUuid).slice(0, 8) + '…',
-      String(serviceUrl).slice(0, 64),
-    );
     return { raw: text };
   }
 }

@@ -111,9 +111,6 @@ export class OpenAiRealtimeVoiceInterpreter {
       headers['OpenAI-Safety-Identifier'] = env.openaiSafetyIdentifier;
     }
 
-    log.info(`Voice interpreter WebSocket → model=${modelName}`);
-
-    this.ws = new WebSocket(uri, { headers });
 
     this.ws.on('open', () => {
       if (this.closed) {

@@ -17,20 +17,9 @@ const PLAY_PCM24_CHUNK_BYTES = 3600;
 
 /** Plivo requires `playAudio.media` to match the Stream `content_type` (incl. rate suffix for µ-law). */
 function sendPcm24ToPlivo(ws, pcm24kDelta, troubleshootCtx) {
-  const troubleshoot =
-    env.openaiRealtimePipeline === 'sarvam_eleven' && env.pipelineTroubleshootLog;
-  const sid = troubleshootCtx?.sessionId;
-  const listener = troubleshootCtx?.listenerLeg;
   const streamId = troubleshootCtx?.streamId;
   const useMulaw = troubleshootCtx?.useMulaw ?? env.plivoStreamUsesMulaw;
-  if (!ws || ws.readyState !== 1 || !pcm24kDelta?.length) {
-    if (troubleshoot && pcm24kDelta?.length) {
-      log.warn(
-        `[engine] playAudio skipped session=${sid} listener=${listener} wsReady=${ws?.readyState} pcm24_bytes=${pcm24kDelta.length}`,
-      );
-    }
-    return;
-  }
+  if (!ws || ws.readyState !== 1 || !pcm24kDelta?.length) return;
   let frames = 0;
   for (let i = 0; i < pcm24kDelta.length; i += PLAY_PCM24_CHUNK_BYTES) {
     const slice = pcm24kDelta.subarray(
@@ -53,11 +42,6 @@ function sendPcm24ToPlivo(ws, pcm24kDelta, troubleshootCtx) {
     if (streamId) out.streamId = streamId;
     ws.send(JSON.stringify(out));
     frames += 1;
-  }
-  if (troubleshoot) {
-    log.info(
-      `[engine] playAudio ok session=${sid} listener=${listener} codec=${useMulaw ? 'mulaw' : 'l16'} streamId=${streamId ? 'yes' : 'no'} pcm24_bytes=${pcm24kDelta.length} chunks=${frames}`,
-    );
   }
 }
 
@@ -112,8 +96,11 @@ export class TranslationSession {
     this.destroyListeners = new Set();
     /** @type {boolean} */
     this._openAiWarmed = false;
-    /** @type {Set<string>} */
-    this._trFirstMediaLog = new Set();
+    /** Debounce timestamps for outbound Plivo clearAudio (per listener leg). */
+    /** @type {number} */
+    this._clearAgentPlaybackNotBefore = 0;
+    /** @type {number} */
+    this._clearCustomerPlaybackNotBefore = 0;
     /**
      * Plivo inbound framing per leg (from Stream `start.mediaFormat` or env default).
      * @type {{ agent: 'mulaw' | 'l16', customer: 'mulaw' | 'l16' }}
@@ -125,7 +112,6 @@ export class TranslationSession {
     /** TTS PCM queued until `streamId` from Plivo `start` */
     this._pendingTtsAgent = [];
     this._pendingTtsCustomer = [];
-    /** @type {boolean} */
     /** Int16 fragments held until we have full 24 kHz sample triplets for clean 24k→8k downsample */
     this._ttsPcm24TailAgent = Buffer.alloc(0);
     this._ttsPcm24TailCustomer = Buffer.alloc(0);
@@ -167,7 +153,7 @@ export class TranslationSession {
         targetIso639: this.toAgentTag,
         elevenLabsVoiceId: env.elevenLabsVoiceIdForIso(this.toAgentTag),
         onDeltaPcm: (pcm24delta) => this.playMuLawOnAgentLeg(pcm24delta),
-        onError: (e) => log.warn('Sarvam+11 cust→agent', this.id, e.message),
+        onError: (e) => log.error('[session]', this.id, 'cust→agent', e.message),
         label: 'cust→agent',
       };
       argsTowCust = {
@@ -175,7 +161,7 @@ export class TranslationSession {
         targetIso639: this.toCustomerTag,
         elevenLabsVoiceId: env.elevenLabsVoiceIdForIso(this.toCustomerTag),
         onDeltaPcm: (pcm24delta) => this.playMuLawOnCustomerLeg(pcm24delta),
-        onError: (e) => log.warn('Sarvam+11 agent→cust', this.id, e.message),
+        onError: (e) => log.error('[session]', this.id, 'agent→cust', e.message),
         label: 'agent→cust',
       };
     } else if (pipeline === 'voice') {
@@ -185,13 +171,13 @@ export class TranslationSession {
         sourceLabel: isoToPromptLabel(this.customerSpokenApprox),
         targetLabel: isoToPromptLabel(this.toAgentTag),
         onDeltaPcm: (pcm24delta) => this.playMuLawOnAgentLeg(pcm24delta),
-        onError: (e) => log.warn('OpenAI cust→agent', this.id, e.message),
+        onError: (e) => log.error('[session]', this.id, 'cust→agent', e.message),
       };
       argsTowCust = {
         sourceLabel: isoToPromptLabel(this.agentSpokenApprox),
         targetLabel: isoToPromptLabel(this.toCustomerTag),
         onDeltaPcm: (pcm24delta) => this.playMuLawOnCustomerLeg(pcm24delta),
-        onError: (e) => log.warn('OpenAI agent→cust', this.id, e.message),
+        onError: (e) => log.error('[session]', this.id, 'agent→cust', e.message),
       };
     } else {
       TowAgent = OpenAiRealtimeTranslation;
@@ -199,12 +185,12 @@ export class TranslationSession {
       argsTowAgent = {
         outputLanguageTag: this.toAgentTag,
         onDeltaPcm: (pcm24delta) => this.playMuLawOnAgentLeg(pcm24delta),
-        onError: (e) => log.warn('OpenAI cust→agent', this.id, e.message),
+        onError: (e) => log.error('[session]', this.id, 'cust→agent', e.message),
       };
       argsTowCust = {
         outputLanguageTag: this.toCustomerTag,
         onDeltaPcm: (pcm24delta) => this.playMuLawOnCustomerLeg(pcm24delta),
-        onError: (e) => log.warn('OpenAI agent→cust', this.id, e.message),
+        onError: (e) => log.error('[session]', this.id, 'agent→cust', e.message),
       };
     }
 
@@ -306,24 +292,8 @@ export class TranslationSession {
     const speech =
       codec === 'mulaw'
         ? isLikelySpeech(rawPayload)
-        : pcm16MonoRms(rawPayload) > 480;
+        : pcm16MonoRms(rawPayload) > env.pipelineBargeInL16MinRms;
 
-    if (
-      env.openaiRealtimePipeline === 'sarvam_eleven' &&
-      env.pipelineTroubleshootLog &&
-      !this._trFirstMediaLog.has(spokeRole)
-    ) {
-      this._trFirstMediaLog.add(spokeRole);
-      const extra =
-        codec === 'mulaw'
-          ? `mulaw_bytes=${rawPayload.length} likely_speech_mulaw=${isLikelySpeech(rawPayload)}`
-          : `pcm16_bytes=${rawPayload.length} likely_speech_l16_rms=${pcm16MonoRms(rawPayload).toFixed(0)}`;
-      log.info(
-        `[engine] Plivo media first packet session=${this.id} speaker_leg=${spokeRole} codec=${codec} ${extra}`,
-      );
-    }
-
-    /**
      * Barge-in: clear Plivo playAudio only for the leg that is *speaking*, so we do not
      * cancel the translation the callee is supposed to hear.
      *
@@ -331,14 +301,14 @@ export class TranslationSession {
      * clearing "customer" playback here chopped the customer's audio mid-sentence.
      */
     if (spokeRole === 'agent' && this.agentStreamId && speech) {
-      this.clearPlivoPlaybackForListener('agent', this.agentStreamId);
+      this.requestClearPlaybackForListener('agent', this.agentStreamId);
     }
     if (spokeRole === 'customer' && speech) {
       if (this.agentStreamId) {
-        this.clearPlivoPlaybackForListener('agent', this.agentStreamId);
+        this.requestClearPlaybackForListener('agent', this.agentStreamId);
       }
       if (this.customerStreamId) {
-        this.clearPlivoPlaybackForListener('customer', this.customerStreamId);
+        this.requestClearPlaybackForListener('customer', this.customerStreamId);
       }
     }
 
@@ -383,15 +353,6 @@ export class TranslationSession {
     const useMulaw = env.plivoStreamUsesMulaw;
     if (!this.agentStreamId) {
       this._pendingTtsAgent.push(pcm);
-      if (
-        env.pipelineTroubleshootLog &&
-        !this._playDeferredLoggedAgent
-      ) {
-        this._playDeferredLoggedAgent = true;
-        log.warn(
-          `[engine] playAudio queued until streamId session=${this.id} listener=agent pcm24_bytes=${pcm.length}`,
-        );
-      }
       return;
     }
     sendPcm24ToPlivo(this.agentPlivoWs, pcm, {
@@ -408,15 +369,6 @@ export class TranslationSession {
     const useMulaw = env.plivoStreamUsesMulaw;
     if (!this.customerStreamId) {
       this._pendingTtsCustomer.push(pcm);
-      if (
-        env.pipelineTroubleshootLog &&
-        !this._playDeferredLoggedCustomer
-      ) {
-        this._playDeferredLoggedCustomer = true;
-        log.warn(
-          `[engine] playAudio queued until streamId session=${this.id} listener=customer pcm24_bytes=${pcm.length}`,
-        );
-      }
       return;
     }
     sendPcm24ToPlivo(this.customerPlivoWs, pcm, {
@@ -438,13 +390,28 @@ export class TranslationSession {
   }
 
   /**
+   * Limits rapid `clearAudio` bursts when echo/noise pulses track as “speech” (same RMS scale as ingest).
+   * @param {"agent"|"customer"} listener — who hears the queue to interrupt
+   */
+  requestClearPlaybackForListener(listener, streamId) {
+    if (!streamId) return;
+    const debounceMs = env.pipelineClearAudioDebounceMs;
+    const now = Date.now();
+    if (listener === 'agent') {
+      if (now < this._clearAgentPlaybackNotBefore) return;
+      this._clearAgentPlaybackNotBefore = now + debounceMs;
+    } else {
+      if (now < this._clearCustomerPlaybackNotBefore) return;
+      this._clearCustomerPlaybackNotBefore = now + debounceMs;
+    }
+    this.clearPlivoPlaybackForListener(listener, streamId);
+  }
+
+  /**
    * @param {"agent"|"customer"} role
    */
   onPlivoSocketClosed(role) {
     if (this.closed) return;
-    log.warn(
-      `Plivo media websocket closed session=${this.id} leg=${role} — ending bridge (any leg disconnect destroys session)`,
-    );
     if (role === 'agent') {
       this.agentPlivoWs = null;
       this.agentStreamId = null;
@@ -460,7 +427,6 @@ export class TranslationSession {
   destroy(reason) {
     if (this.closed) return;
     this.closed = true;
-    log.info('Session destroy', this.id, reason);
     try {
       this.oaiTowardAgent?.close();
       this.oaiTowardCustomer?.close();

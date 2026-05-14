@@ -14,11 +14,7 @@ const plivoWss = attachPlivoMediaWs(server, registry);
 
 server.requestTimeout = 120_000;
 
-server.listen(env.port, () => {
-  log.info(`HTTP+WS gateway listening ${env.port}`);
-  log.info(`BASE_URL=${env.baseUrl}`);
-  log.info(`WS_BASE_URL=${env.wsBaseUrl}`);
-});
+server.listen(env.port);
 
 function shutdown(signal) {
   log.warn(`Graceful shutdown (${signal})`);
