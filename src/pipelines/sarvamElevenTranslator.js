@@ -377,6 +377,12 @@ export class SarvamElevenTranslator {
 
     if (!line.trim()) return;
 
+    if (env.pipelineTranslationConsoleLog) {
+      log.info(
+        `TRANSLATION ${this.label} │ STT(${this.sourceIso639})=${JSON.stringify(raw)} │ TTS_text(${this.targetIso639})=${JSON.stringify(line)} │ Sarvam_detected_lang=${detected ?? '?'} │ translate_API=${needsTranslate}`,
+      );
+    }
+
     const dedupeKey = normalizeForTtsDedupe(line);
     const now = Date.now();
     if (

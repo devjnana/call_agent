@@ -154,6 +154,11 @@ export const env = {
     String(req('PIPELINE_TROUBLESHOOT_LOG', 'true')).toLowerCase() === 'true',
   /** Frequent RMS / buffer dumps (PIPELINE_VERBOSE_LOG=true). */
   pipelineVerboseLog: String(req('PIPELINE_VERBOSE_LOG', 'false')).toLowerCase() === 'true',
+  /**
+   * Sarvam+11: log each utterance STT transcript → final string sent to ElevenLabs (`[engine] TRANSLATE:…`).
+   */
+  pipelineTranslationConsoleLog:
+    String(req('PIPELINE_TRANSLATION_CONSOLE_LOG', 'true')).toLowerCase() === 'true',
 
   /**
    * Per-listener voice: `ELEVENLABS_VOICE_EN`, `ELEVENLABS_VOICE_HI`, … else `ELEVENLABS_VOICE_ID`.
@@ -211,6 +216,11 @@ export function assertEnvForRuntime() {
     }
     if (env.pipelineVerboseLog) {
       console.info('[boot] PIPELINE_VERBOSE_LOG=true — extra per-chunk RMS logs');
+    }
+    if (env.pipelineTranslationConsoleLog) {
+      console.info(
+        '[boot] PIPELINE_TRANSLATION_CONSOLE_LOG=true — each utterance logs STT transcript → text sent to TTS',
+      );
     }
   } else {
     console.info(
