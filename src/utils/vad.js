@@ -16,6 +16,26 @@ export function pcm16MonoRms(pcm16) {
 }
 
 /**
+ * Share of windows (20 ms @ 16 kHz mono = 640 bytes) whose RMS exceeds `rmsThreshold`.
+ * Helps reject steady line noise that has moderate mean RMS but few speech-like bursts.
+ * @param {Buffer} pcm16
+ * @param {number} rmsThreshold — same scale as {@link pcm16MonoRms}
+ * @param {number} [frameSamples=320] — 320 = 20 ms @ 16 kHz
+ * @returns {number} in [0, 1]
+ */
+export function pcm16MonoLoudFrameRatio(pcm16, rmsThreshold, frameSamples = 320) {
+  if (!pcm16 || pcm16.length < frameSamples * 2 || rmsThreshold <= 0) return 0;
+  const frameBytes = frameSamples * 2;
+  let loud = 0;
+  let total = 0;
+  for (let off = 0; off + frameBytes <= pcm16.length; off += frameBytes) {
+    total += 1;
+    if (pcm16MonoRms(pcm16.subarray(off, off + frameBytes)) > rmsThreshold) loud += 1;
+  }
+  return total ? loud / total : 0;
+}
+
+/**
  * @param {Buffer} mulawChunk
  * @returns {boolean}
  */

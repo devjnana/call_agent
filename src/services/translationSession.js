@@ -12,20 +12,21 @@ import { OpenAiRealtimeVoiceInterpreter } from '../openai/realtimeVoiceInterpret
 import { SarvamElevenTranslator } from '../pipelines/sarvamElevenTranslator.js';
 import { log } from '../utils/logger.js';
 
-/** Chunk TTS PCM for Plivo playAudio frames (~75ms at 24kHz mono s16le). */
-const PLAY_PCM24_CHUNK_BYTES = 3600;
+/** TTS PCM sent to Plivo in aligned chunks (24 kHz s16le → 8 kHz uses 3-sample groups = 6 bytes). */
+function playPcm24ChunkBytes() {
+  const raw = Math.round((24000 * 2 * env.pipelinePlivoPlayaudioChunkMs) / 1000);
+  return Math.max(960, Math.floor(raw / 6) * 6);
+}
 
 /** Plivo requires `playAudio.media` to match the Stream `content_type` (incl. rate suffix for µ-law). */
 function sendPcm24ToPlivo(ws, pcm24kDelta, troubleshootCtx) {
   const streamId = troubleshootCtx?.streamId;
   const useMulaw = troubleshootCtx?.useMulaw ?? env.plivoStreamUsesMulaw;
   if (!ws || ws.readyState !== 1 || !pcm24kDelta?.length) return;
+  const step = playPcm24ChunkBytes();
   let frames = 0;
-  for (let i = 0; i < pcm24kDelta.length; i += PLAY_PCM24_CHUNK_BYTES) {
-    const slice = pcm24kDelta.subarray(
-      i,
-      Math.min(i + PLAY_PCM24_CHUNK_BYTES, pcm24kDelta.length),
-    );
+  for (let i = 0; i < pcm24kDelta.length; i += step) {
+    const slice = pcm24kDelta.subarray(i, Math.min(i + step, pcm24kDelta.length));
     const bytes8k = useMulaw ? openAiPcmToPlivoMuLaw(slice) : pcm24kTo8k(slice);
     const media = useMulaw
       ? {

@@ -1,18 +1,34 @@
 import { pcm16LeToMuLaw } from './mulaw.js';
 
 /**
- * Upsample 8 kHz PCM16 LE mono to 24 kHz by sample hold (cheap, stable for VoIP STFT chains).
+ * Upsample 8 kHz PCM16 LE mono to 24 kHz (3×) with linear interpolation.
+ * Sample-hold (repeating each sample 3×) adds stair-step edges that hurt STT; interpolation
+ * better matches how Plivo / telco audio should be represented before higher-rate processing.
  */
 export function pcm8kTo24k(pcm8k) {
   const nIn = pcm8k.length >>> 1;
-  const out = Buffer.allocUnsafe(nIn * 3 * 2);
-  let o = 0;
-  for (let i = 0; i < nIn; i++) {
-    const s = pcm8k.readInt16LE(i * 2);
-    out.writeInt16LE(s, o);
-    out.writeInt16LE(s, o + 2);
-    out.writeInt16LE(s, o + 4);
-    o += 6;
+  if (nIn <= 0) return Buffer.alloc(0);
+  if (nIn === 1) {
+    const s = pcm8k.readInt16LE(0);
+    const out = Buffer.allocUnsafe(6);
+    out.writeInt16LE(s, 0);
+    out.writeInt16LE(s, 2);
+    out.writeInt16LE(s, 4);
+    return out;
+  }
+  const outSampleCount = nIn * 3;
+  const out = Buffer.allocUnsafe(outSampleCount * 2);
+  for (let j = 0; j < outSampleCount; j++) {
+    const srcPos = j / 3;
+    const i0 = Math.floor(srcPos);
+    const i1 = Math.min(i0 + 1, nIn - 1);
+    const frac = srcPos - i0;
+    const s0 = pcm8k.readInt16LE(i0 * 2);
+    const s1 = pcm8k.readInt16LE(i1 * 2);
+    let s = Math.round(s0 + (s1 - s0) * frac);
+    if (s < -32768) s = -32768;
+    else if (s > 32767) s = 32767;
+    out.writeInt16LE(s, j * 2);
   }
   return out;
 }

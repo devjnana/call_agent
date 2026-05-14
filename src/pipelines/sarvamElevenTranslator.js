@@ -5,7 +5,7 @@
 import { env } from '../config/index.js';
 import { log } from '../utils/logger.js';
 import { pcm24kTo16k, pcm16leMonoToWav } from '../utils/audioResample.js';
-import { pcm16MonoRms } from '../utils/vad.js';
+import { pcm16MonoRms, pcm16MonoLoudFrameRatio } from '../utils/vad.js';
 import { repairSttMisheardBrand } from '../utils/sttBrandRepair.js';
 import { iso639ToSarvam, iso639ToSarvamSttHint } from '../utils/sarvamLanguages.js';
 
@@ -60,7 +60,7 @@ export class SarvamElevenTranslator {
     /** @type {ReturnType<typeof setTimeout> | null} */
     this._silenceTimer = null;
     this._appendCount = 0;
-    /** @type {Buffer[]} */
+    /** @type {{ pcm: Buffer; reason?: string }[]} */
     this.jobQueue = [];
     this._processing = false;
     /** @type {AbortController | null} */
@@ -78,6 +78,31 @@ export class SarvamElevenTranslator {
       env.pipelineSilenceFlushMinRms > 0
         ? env.pipelineSilenceFlushMinRms
         : Math.max(36, Math.round(this.maxHoldMinRms * 0.88));
+
+    /** agent→customer: fewer STT runs on line tone (Sarvam hallucinations). */
+    this._strictAgentToCust =
+      this.label === 'agent→cust' && env.pipelineAgentToCustomerStrictStt;
+    if (this._strictAgentToCust) {
+      const holdMs = env.pipelineAgentToCustomerMaxHoldMs;
+      this.maxHoldMs = holdMs > 0 ? holdMs : Number.POSITIVE_INFINITY;
+      const ur = env.pipelineAgentToCustomerUtteranceRms;
+      if (ur > 0) this.rmsThreshold = ur;
+      if (env.pipelineSilenceFlushMinRms <= 0) {
+        const floor = env.pipelineAgentToCustomerSilenceFlushFloorRms;
+        this._silenceFlushMinRms = Math.max(this._silenceFlushMinRms, floor);
+      }
+      const stMin = env.pipelineAgentToCustomerSttMinBufferRms;
+      this._strictSttMinBufRms =
+        stMin > 0 ? stMin : Math.max(this._silenceFlushMinRms + 8, 52);
+      this._strictSttMinLoudRatio = Math.max(
+        0,
+        env.pipelineAgentToCustomerMinLoudFrameRatio,
+      );
+    } else {
+      this._strictSttMinBufRms = 0;
+      this._strictSttMinLoudRatio = 0;
+    }
+
     this._ttsDedupeWindowMs = env.pipelineTtsDedupeWindowMs;
     this._ttsDedupeMinChars = env.pipelineTtsDedupeMinChars;
     /** @type {string} */
@@ -196,17 +221,19 @@ export class SarvamElevenTranslator {
     }
     this.buffer = Buffer.alloc(0);
     this._bufferStartTs = null;
-    this.jobQueue.push(pcm);
+    this.jobQueue.push({ pcm, reason });
     this.drainQueue();
   }
 
   async drainQueue() {
     if (this._processing || this.jobQueue.length === 0 || this.closed) return;
     this._processing = true;
-    const pcm24 = this.jobQueue.shift();
+    const job = this.jobQueue.shift();
+    const pcm24 = job?.pcm;
+    const reason = job?.reason ?? 'unknown';
     this._abort = new AbortController();
     try {
-      await this.processPcmUtterance(pcm24, this._abort.signal);
+      await this.processPcmUtterance(pcm24, reason, this._abort.signal);
     } catch (e) {
       if (e?.name === 'AbortError') return;
       const msg = e instanceof Error ? e.message : String(e);
@@ -221,16 +248,27 @@ export class SarvamElevenTranslator {
 
   /**
    * @param {Buffer} pcm24
+   * @param {string} [reason]
    * @param {AbortSignal} signal
    */
-  async processPcmUtterance(pcm24, signal) {
+  async processPcmUtterance(pcm24, reason, signal) {
     if (this.configInvalid || !this.elevenLabsVoiceId) return;
     const targetSarvam = iso639ToSarvam(this.targetIso639);
     if (!targetSarvam) {
       throw new Error(`Unsupported target ISO for Sarvam: ${this.targetIso639}`);
     }
 
+    if (!pcm24?.length) return;
+
     const pcm16 = pcm24kTo16k(pcm24);
+    if (this._strictAgentToCust) {
+      const wholeRms = pcm16MonoRms(pcm16);
+      if (wholeRms < this._strictSttMinBufRms) return;
+      if (this._strictSttMinLoudRatio > 0) {
+        const ratio = pcm16MonoLoudFrameRatio(pcm16, this.rmsThreshold);
+        if (ratio < this._strictSttMinLoudRatio) return;
+      }
+    }
     const wav = pcm16leMonoToWav(pcm16, 16000);
     const sttLang = iso639ToSarvamSttHint(this.sourceIso639);
 

@@ -110,6 +110,14 @@ export const env = {
   plivoStreamContentType: _plivoStreamCt,
   /** True when stream uses G.711 µ-law (otherwise 8 kHz s16le linear PCM). */
   plivoStreamUsesMulaw: String(_plivoStreamCt).toLowerCase().includes('mulaw'),
+  /**
+   * Plivo `playAudio`: frame size in ms of 24 kHz mono TTS before downsample to 8 kHz.
+   * ~40–60 ms can feel smoother / less bursty than 75 ms; must stay 6-byte aligned internally (derived).
+   */
+  pipelinePlivoPlayaudioChunkMs: Math.min(
+    120,
+    Math.max(28, reqNum('PIPELINE_PLAYAUDIO_CHUNK_MS', 75)),
+  ),
   customerDialDelayMs: reqNum('CUSTOMER_DIAL_DELAY_MS', 400),
   sessionIdleTtlMs: reqNum('SESSION_IDLE_TTL_MS', 2 * 60 * 60 * 1000),
   callSetupTimeoutMs: reqNum('CALL_SETUP_TIMEOUT_MS', 120000),
@@ -163,6 +171,39 @@ export const env = {
    * Sarvam+11: min whole-buffer RMS for `silence_after_speech` flush before STT. 0 ≈ 0.88× max-hold min RMS.
    */
   pipelineSilenceFlushMinRms: reqNum('PIPELINE_SILENCE_FLUSH_MIN_RMS', 0),
+
+  /**
+   * Sarvam+11 agent→customer: stricter gates before Sarvam STT (fewer hallucinations on line tone / silence).
+   * Default **true**. Set `false` for legacy parity with cust→agent.
+   */
+  pipelineAgentToCustomerStrictStt:
+    String(req('PIPELINE_AGENT_TO_CUSTOMER_STRICT_STT', 'true')).toLowerCase() === 'true',
+  /**
+   * Max ms of buffered audio without flush before forcing STT (same idea as PIPELINE_MAX_HOLD_BEFORE_FLUSH_MS).
+   * Default **0** = disabled on agent→customer when strict STT is on (recommended). Set **3200** to restore periodic flush.
+   */
+  pipelineAgentToCustomerMaxHoldMs: reqNum('PIPELINE_AGENT_TO_CUSTOMER_MAX_HOLD_MS', 0),
+  /**
+   * Min share of 20 ms @ 16 kHz frames with RMS ≥ utterance threshold before STT (strict agent→customer). 0 = skip check.
+   */
+  pipelineAgentToCustomerMinLoudFrameRatio: reqNum(
+    'PIPELINE_AGENT_TO_CUSTOMER_MIN_LOUD_FRAME_RATIO',
+    0.14,
+  ),
+  /** Min whole-clip RMS (int16 mono 16 kHz upsampled PCM) before STT; 0 = auto from silence-flush floor. */
+  pipelineAgentToCustomerSttMinBufferRms: reqNum(
+    'PIPELINE_AGENT_TO_CUSTOMER_STT_MIN_BUFFER_RMS',
+    0,
+  ),
+  /** Optional higher utterance RMS for agent→customer only; 0 = use PIPELINE_UTTERANCE_RMS. */
+  pipelineAgentToCustomerUtteranceRms: reqNum('PIPELINE_AGENT_TO_CUSTOMER_UTTERANCE_RMS', 0),
+  /**
+   * Floor for silence-flush min RMS on strict agent→customer (only when PIPELINE_SILENCE_FLUSH_MIN_RMS is unset/0).
+   */
+  pipelineAgentToCustomerSilenceFlushFloorRms: reqNum(
+    'PIPELINE_AGENT_TO_CUSTOMER_SILENCE_FLUSH_FLOOR_RMS',
+    52,
+  ),
 
   /** OpenAI voice (`server_vad`): ms of silence before end-of-speech. Higher reduces spurious turns on a quiet line. */
   openaiVoiceServerVadSilenceMs: reqNum('OPENAI_VOICE_SERVER_VAD_SILENCE_MS', 520),
