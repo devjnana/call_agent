@@ -150,6 +150,15 @@ export const env = {
    * When set (e.g. Saasgold), English STT lines get `Sanskrit`/`Sanscrit` → this string before Sarvam translate.
    */
   pipelinePrimaryBrand: String(req('PIPELINE_PRIMARY_BRAND', '') || '').trim(),
+  /** English agent STT spelling (e.g. Kali); pair with PIPELINE_AGENT_STT_NAME_ALIASES for fuzzy repairs. */
+  pipelineAgentSpokenName: String(req('PIPELINE_AGENT_SPOKEN_NAME', '') || '').trim(),
+  /** Comma/semicolon/pipe-separated mistaken STT variants of PIPELINE_AGENT_SPOKEN_NAME (applied agent→cust English). */
+  pipelineAgentNameSttAliases: String(req('PIPELINE_AGENT_STT_NAME_ALIASES', '') || '').trim(),
+  /**
+   * If Latin STT looks like Hindi (Hinglish), send Sarvam translate with source `hi-IN` instead of `en-IN` when target is Hindi.
+   */
+  pipelineTranslateRomanHindiSourceHi:
+    String(req('PIPELINE_TRANSLATE_ROMAN_HI_SOURCE_HI', 'true')).toLowerCase() !== 'false',
   /**
    * If RMS never crosses the threshold (very soft speech), still flush after this many ms of audio
    * in the buffer so Sarvam STT still runs.

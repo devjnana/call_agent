@@ -6,7 +6,8 @@ import { env } from '../config/index.js';
 import { log } from '../utils/logger.js';
 import { pcm24kTo16k, pcm16leMonoToWav } from '../utils/audioResample.js';
 import { pcm16MonoRms, pcm16MonoLoudFrameRatio } from '../utils/vad.js';
-import { repairSttMisheardBrand } from '../utils/sttBrandRepair.js';
+import { repairSttMisheardBrand, repairAgentSpokenName } from '../utils/sttBrandRepair.js';
+import { looksRomanizedHindi } from '../utils/romanizedHindi.js';
 import { iso639ToSarvam, iso639ToSarvamSttHint } from '../utils/sarvamLanguages.js';
 
 const SARVAM = 'https://api.sarvam.ai';
@@ -363,6 +364,18 @@ export class SarvamElevenTranslator {
       const repaired = repairSttMisheardBrand(raw, env.pipelinePrimaryBrand);
       textForTranslate = repaired;
     }
+    if (
+      sourceEnish &&
+      this.label === 'agent→cust' &&
+      env.pipelineAgentSpokenName &&
+      env.pipelineAgentNameSttAliases
+    ) {
+      textForTranslate = repairAgentSpokenName(
+        textForTranslate,
+        env.pipelineAgentSpokenName,
+        env.pipelineAgentNameSttAliases,
+      );
+    }
 
     if (env.pipelineVoiceTextLog) {
       const route = voiceTextRouteHuman(this.label);
@@ -380,9 +393,19 @@ export class SarvamElevenTranslator {
 
     let line = textForTranslate;
     if (needsTranslate) {
+      let translateSource = sourceMapped || detected || 'auto';
+      if (
+        env.pipelineTranslateRomanHindiSourceHi &&
+        targetSarvam === 'hi-IN' &&
+        sourceEnish &&
+        looksRomanizedHindi(textForTranslate)
+      ) {
+        translateSource = 'hi-IN';
+      }
+
       const trBody = {
         input: textForTranslate,
-        source_language_code: sourceMapped || detected || 'auto',
+        source_language_code: translateSource,
         target_language_code: targetSarvam,
         model: env.sarvamTranslateModel,
       };
