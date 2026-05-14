@@ -294,6 +294,7 @@ export class TranslationSession {
         ? isLikelySpeech(rawPayload)
         : pcm16MonoRms(rawPayload) > env.pipelineBargeInL16MinRms;
 
+    /**
      * Barge-in: clear Plivo playAudio only for the leg that is *speaking*, so we do not
      * cancel the translation the callee is supposed to hear.
      *
