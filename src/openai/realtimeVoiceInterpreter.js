@@ -18,7 +18,7 @@ function vadBlock() {
   return {
     type: 'server_vad',
     threshold: 0.45,
-    silence_duration_ms: 400,
+    silence_duration_ms: env.openaiVoiceServerVadSilenceMs,
     prefix_padding_ms: 250,
   };
 }
@@ -55,6 +55,7 @@ export class OpenAiRealtimeVoiceInterpreter {
       'Preserve proper nouns, numerals (say digit groups clearly), currency, dates.',
       'Treat quiet audio as silence; translate every speech segment eagerly after natural pauses (server VAD).',
       `If fragments are partial, synthesize coherent ${this.targetLabel} that matches audible intent.`,
+      'CRITICAL: One spoken output per distinct NEW utterance from the speaker. Never repeat or re-read your previous interpretation when the line is quiet or unchanged — stay silent until they speak again.',
     ].join('\n');
 
     /** @type {WebSocket | null} */

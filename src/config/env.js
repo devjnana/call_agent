@@ -134,6 +134,20 @@ export const env = {
    * from being sent every PIPELINE_MAX_HOLD_BEFORE_FLUSH_MS (avoids repeated bogus TTS). 0 = auto from PIPELINE_UTTERANCE_RMS.
    */
   pipelineMaxHoldMinRms: reqNum('PIPELINE_MAX_HOLD_MIN_RMS', 0),
+  /**
+   * Sarvam+11: skip ElevenLabs when normalized text matches the last line within this window
+   * (stops repeated TTS from STT noise/echo with a different tone).
+   */
+  pipelineTtsDedupeWindowMs: reqNum('PIPELINE_TTS_DEDUPE_WINDOW_MS', 14000),
+  /** Sarvam+11: only dedupe strings at least this long (after normalize). */
+  pipelineTtsDedupeMinChars: reqNum('PIPELINE_TTS_DEDUPE_MIN_CHARS', 2),
+  /**
+   * Sarvam+11: min whole-buffer RMS for `silence_after_speech` flush before STT. 0 ≈ 0.88× max-hold min RMS.
+   */
+  pipelineSilenceFlushMinRms: reqNum('PIPELINE_SILENCE_FLUSH_MIN_RMS', 0),
+
+  /** OpenAI voice (`server_vad`): ms of silence before end-of-speech. Higher reduces spurious turns on a quiet line. */
+  openaiVoiceServerVadSilenceMs: reqNum('OPENAI_VOICE_SERVER_VAD_SILENCE_MS', 520),
 
   /** Sarvam+11 milestones: flush, STT/TTS/playAudio skips. Default true; set PIPELINE_TROUBLESHOOT_LOG=false to mute. */
   pipelineTroubleshootLog:
@@ -173,7 +187,10 @@ export function assertEnvForRuntime() {
   const p = env.openaiRealtimePipeline;
   if (p === 'voice') {
     console.info(
-      `[boot] OPENAI_REALTIME_PIPELINE=voice • models (try until one accepts): ${env.openaiVoiceModelChain.join(' → ')} · VAD=${env.openaiVoiceVadKind}`,
+      `[boot] OPENAI_REALTIME_PIPELINE=voice • models (try until one accepts): ${env.openaiVoiceModelChain.join(' → ')} · VAD=${env.openaiVoiceVadKind}` +
+        (String(env.openaiVoiceVadKind).toLowerCase() === 'semantic_vad'
+          ? ''
+          : ` • OPENAI_VOICE_SERVER_VAD_SILENCE_MS=${env.openaiVoiceServerVadSilenceMs}`),
     );
   } else if (p === 'sarvam_eleven') {
     console.info(

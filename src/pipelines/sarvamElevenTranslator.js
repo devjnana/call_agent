@@ -10,6 +10,17 @@ import { iso639ToSarvam, iso639ToSarvamSttHint } from '../utils/sarvamLanguages.
 
 const SARVAM = 'https://api.sarvam.ai';
 
+/** Collapse text for duplicate-TTS detection (same phrase → ElevenLabs sounds different each call). */
+function normalizeForTtsDedupe(text) {
+  return String(text || '')
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export class SarvamElevenTranslator {
   /**
    * @param {object} opts
@@ -56,6 +67,15 @@ export class SarvamElevenTranslator {
       env.pipelineMaxHoldMinRms > 0
         ? env.pipelineMaxHoldMinRms
         : Math.max(45, Math.round(this.rmsThreshold * 0.45));
+    this._silenceFlushMinRms =
+      env.pipelineSilenceFlushMinRms > 0
+        ? env.pipelineSilenceFlushMinRms
+        : Math.max(36, Math.round(this.maxHoldMinRms * 0.88));
+    this._ttsDedupeWindowMs = env.pipelineTtsDedupeWindowMs;
+    this._ttsDedupeMinChars = env.pipelineTtsDedupeMinChars;
+    /** @type {string} */
+    this._lastTtsKey = '';
+    this._lastTtsAt = 0;
   }
 
   connect() {
@@ -94,7 +114,7 @@ export class SarvamElevenTranslator {
       return;
     }
     log.info(
-      `Sarvam+11 translator ready (${this.label}) · Sarvam=${tgt} · eleven_voice=${String(this.elevenLabsVoiceId).slice(0, 8)}… · rms≥${this.rmsThreshold} silenceMs=${this.silenceMs} minClipMs=${env.pipelineMinUtteranceMs} maxHoldMs=${this.maxHoldMs} maxHoldMinBufRms=${this.maxHoldMinRms} troubleshoot=${env.pipelineTroubleshootLog}`,
+      `Sarvam+11 translator ready (${this.label}) · Sarvam=${tgt} · eleven_voice=${String(this.elevenLabsVoiceId).slice(0, 8)}… · rms≥${this.rmsThreshold} silenceMs=${this.silenceMs} minClipMs=${env.pipelineMinUtteranceMs} maxHoldMs=${this.maxHoldMs} maxHoldMinBufRms=${this.maxHoldMinRms} silenceFlushMinRms=${this._silenceFlushMinRms} ttsDedupeMs=${this._ttsDedupeWindowMs} troubleshoot=${env.pipelineTroubleshootLog}`,
     );
   }
 
@@ -192,6 +212,19 @@ export class SarvamElevenTranslator {
       return;
     }
     const pcm = Buffer.from(this.buffer);
+    if (reason === 'silence_after_speech') {
+      const bufRms = pcm16MonoRms(pcm);
+      if (bufRms < this._silenceFlushMinRms) {
+        if (env.pipelineTroubleshootLog) {
+          log.info(
+            `Sarvam+11 [${this.label}] flush dropped (weak clip) reason=${reason} buf_rms=${bufRms.toFixed(1)} min=${this._silenceFlushMinRms}`,
+          );
+        }
+        this.buffer = Buffer.alloc(0);
+        this._bufferStartTs = null;
+        return;
+      }
+    }
     const msAudio = Math.round(((pcm.length / 2) * 1000) / 24000);
     this.buffer = Buffer.alloc(0);
     this._bufferStartTs = null;
@@ -342,13 +375,28 @@ export class SarvamElevenTranslator {
       }
     }
 
+    if (!line.trim()) return;
+
+    const dedupeKey = normalizeForTtsDedupe(line);
+    const now = Date.now();
+    if (
+      dedupeKey.length >= this._ttsDedupeMinChars &&
+      dedupeKey === this._lastTtsKey &&
+      now - this._lastTtsAt < this._ttsDedupeWindowMs
+    ) {
+      if (env.pipelineTroubleshootLog) {
+        log.info(
+          `Sarvam+11 [${this.label}] TTS skipped (duplicate within ${this._ttsDedupeWindowMs} ms) snippet=${JSON.stringify(dedupeKey.slice(0, 72))}`,
+        );
+      }
+      return;
+    }
+
     if (env.pipelineTroubleshootLog) {
       log.info(
         `Sarvam+11 [${this.label}] ElevenLabs request text_chars=${line.length} translate_used=${needsTranslate} snippet=${JSON.stringify(line.slice(0, 120))}`,
       );
     }
-
-    if (!line.trim()) return;
 
     const u = new URL(`https://api.elevenlabs.io/v1/text-to-speech/${this.elevenLabsVoiceId}/stream`);
     u.searchParams.set('output_format', 'pcm_24000');
@@ -384,6 +432,8 @@ export class SarvamElevenTranslator {
       if (env.pipelineTroubleshootLog) {
         log.info(`Sarvam+11 [${this.label}] ElevenLabs body (non-stream) pcm24_bytes=${buf.length}`);
       }
+      this._lastTtsKey = dedupeKey;
+      this._lastTtsAt = Date.now();
       return;
     }
 
@@ -407,6 +457,8 @@ export class SarvamElevenTranslator {
         `Sarvam+11 [${this.label}] ElevenLabs stream done total_pcm24_bytes=${streamed} (callbacks to playAudio should follow)`,
       );
     }
+    this._lastTtsKey = dedupeKey;
+    this._lastTtsAt = Date.now();
   }
 
   close() {
