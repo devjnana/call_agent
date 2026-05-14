@@ -188,7 +188,7 @@ export const env = {
    */
   pipelineAgentToCustomerMinLoudFrameRatio: reqNum(
     'PIPELINE_AGENT_TO_CUSTOMER_MIN_LOUD_FRAME_RATIO',
-    0.14,
+    0.24,
   ),
   /** Min whole-clip RMS (int16 mono 16 kHz upsampled PCM) before STT; 0 = auto from silence-flush floor. */
   pipelineAgentToCustomerSttMinBufferRms: reqNum(
@@ -202,7 +202,30 @@ export const env = {
    */
   pipelineAgentToCustomerSilenceFlushFloorRms: reqNum(
     'PIPELINE_AGENT_TO_CUSTOMER_SILENCE_FLUSH_FLOOR_RMS',
-    52,
+    58,
+  ),
+  /**
+   * agent→cust: accumulate this many ms above RMS threshold (per ingest chunk duration) before a silence-after-speech flush can be armed.
+   * Stops sporadic spikes from opening an utterance for Sarvam.
+   */
+  pipelineAgentToCustomerMinConsecutiveLoudMs: reqNum(
+    'PIPELINE_AGENT_TO_CUSTOMER_MIN_CONSECUTIVE_LOUD_MS',
+    300,
+  ),
+  /** agent→cust silence tail after loud streak (ms). 0 = max( PIPELINE_UTTERANCE_SILENCE_MS, 620 ). */
+  pipelineAgentToCustomerUtteranceSilenceMs: reqNum(
+    'PIPELINE_AGENT_TO_CUSTOMER_UTTERANCE_SILENCE_MS',
+    0,
+  ),
+  /** agent→cust: drop weak flush soon after prior STT (ms). 0 = off. Reduces hallucination bursts. */
+  pipelineAgentToCustomerMinMsBetweenStt: reqNum(
+    'PIPELINE_AGENT_TO_CUSTOMER_MIN_MS_BETWEEN_STT',
+    550,
+  ),
+  /** Extra RMS (same units as pcm16MonoRms on 24 k buffer) on top of strict min during cooldown rejection. */
+  pipelineAgentToCustomerCooldownExtraRms: reqNum(
+    'PIPELINE_AGENT_TO_CUSTOMER_COOLDOWN_EXTRA_RMS',
+    14,
   ),
 
   /** OpenAI voice (`server_vad`): ms of silence before end-of-speech. Higher reduces spurious turns on a quiet line. */

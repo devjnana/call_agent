@@ -98,9 +98,19 @@ export class SarvamElevenTranslator {
         0,
         env.pipelineAgentToCustomerMinLoudFrameRatio,
       );
+      this._agentCustMinConsecLoudMs =
+        env.pipelineAgentToCustomerMinConsecutiveLoudMs;
+      this._agentCustConsecutiveLoudMs = 0;
+      this._lastSttCompletedAt = 0;
+      const as = env.pipelineAgentToCustomerUtteranceSilenceMs;
+      this.silenceMs =
+        as > 0 ? as : Math.max(env.pipelineUtteranceSilenceMs, 640);
     } else {
       this._strictSttMinBufRms = 0;
       this._strictSttMinLoudRatio = 0;
+      this._agentCustMinConsecLoudMs = 0;
+      this._agentCustConsecutiveLoudMs = 0;
+      this._lastSttCompletedAt = 0;
     }
 
     this._ttsDedupeWindowMs = env.pipelineTtsDedupeWindowMs;
@@ -170,7 +180,25 @@ export class SarvamElevenTranslator {
     }
 
     const loud = rms > this.rmsThreshold;
-    if (loud) {
+    const chunkMs = (pcm16le24k.length / (24000 * 2)) * 1000;
+
+    if (this._strictAgentToCust && this._agentCustMinConsecLoudMs > 0) {
+      if (loud) {
+        this._agentCustConsecutiveLoudMs += chunkMs;
+      } else {
+        this._agentCustConsecutiveLoudMs = 0;
+      }
+      if (
+        loud &&
+        this._agentCustConsecutiveLoudMs >= this._agentCustMinConsecLoudMs
+      ) {
+        if (this._silenceTimer) clearTimeout(this._silenceTimer);
+        this._silenceTimer = setTimeout(
+          () => this.flushUtterance('silence_after_speech'),
+          this.silenceMs,
+        );
+      }
+    } else if (loud) {
       if (this._silenceTimer) clearTimeout(this._silenceTimer);
       this._silenceTimer = setTimeout(
         () => this.flushUtterance('silence_after_speech'),
@@ -213,14 +241,36 @@ export class SarvamElevenTranslator {
     const pcm = Buffer.from(this.buffer);
     if (reason === 'silence_after_speech') {
       const bufRms = pcm16MonoRms(pcm);
+      if (this._strictAgentToCust) {
+        const gap = env.pipelineAgentToCustomerMinMsBetweenStt;
+        if (
+          gap > 0 &&
+          this._lastSttCompletedAt > 0 &&
+          Date.now() - this._lastSttCompletedAt < gap
+        ) {
+          const extra = Math.max(
+            0,
+            env.pipelineAgentToCustomerCooldownExtraRms,
+          );
+          const bufRms16 = pcm16MonoRms(pcm24kTo16k(pcm));
+          if (bufRms16 < this._strictSttMinBufRms + extra) {
+            this.buffer = Buffer.alloc(0);
+            this._bufferStartTs = null;
+            this._agentCustConsecutiveLoudMs = 0;
+            return;
+          }
+        }
+      }
       if (bufRms < this._silenceFlushMinRms) {
         this.buffer = Buffer.alloc(0);
         this._bufferStartTs = null;
+        this._agentCustConsecutiveLoudMs = 0;
         return;
       }
     }
     this.buffer = Buffer.alloc(0);
     this._bufferStartTs = null;
+    this._agentCustConsecutiveLoudMs = 0;
     this.jobQueue.push({ pcm, reason });
     this.drainQueue();
   }
@@ -299,6 +349,7 @@ export class SarvamElevenTranslator {
     }
     const raw = (stt.transcript || '').trim();
     if (!raw) return;
+    if (this._strictAgentToCust) this._lastSttCompletedAt = Date.now();
 
     const sourceMapped = iso639ToSarvam(this.sourceIso639);
     const detected =
