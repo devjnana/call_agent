@@ -5,6 +5,17 @@
 const TABLE = Object.freeze({
   english: 'en',
   hindi: 'hi',
+  tamil: 'ta',
+  telugu: 'te',
+  bengali: 'bn',
+  kannada: 'kn',
+  malayalam: 'ml',
+  marathi: 'mr',
+  gujarati: 'gu',
+  punjabi: 'pa',
+  urdu: 'ur',
+  odia: 'or',
+  oriya: 'or',
   spanish: 'es',
   french: 'fr',
   german: 'de',
@@ -47,7 +58,9 @@ export function resolveTranslationTargets(agent_language, customer_language) {
     throw new Error('agent_language and customer_language are required');
   }
   if (agentTag === null || custTag === null) {
-    throw new Error('Unsupported language label; use english, hindi, ISO-639-1 code, or auto');
+    throw new Error(
+      'Unsupported language label; use english, hindi, tamil, … (see API docs), a two-letter ISO-639-1 code, or auto',
+    );
   }
 
   if (agentTag === 'auto' && custTag === 'auto') {

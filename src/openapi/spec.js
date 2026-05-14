@@ -217,12 +217,13 @@ const base = {
           agent_language: {
             type: 'string',
             description:
-              'Target language the **agent should hear** (interpreter output toward agent). Use `english`, `hindi`, ISO 639-1, or `auto` (pair with explicit other side).',
+              'Target language the **agent should hear** (interpreter output toward agent). CRM labels: `english`, `hindi`, `tamil`, `telugu`, … or any two-letter ISO 639-1 code (`en`, `ta`). `auto` allowed if the other side is explicit.',
             example: 'english',
           },
           customer_language: {
             type: 'string',
-            description: 'Target language the **customer should hear**.',
+            description:
+              'Target language the **customer should hear** — same label rules as `agent_language`.',
             example: 'hindi',
           },
         },
